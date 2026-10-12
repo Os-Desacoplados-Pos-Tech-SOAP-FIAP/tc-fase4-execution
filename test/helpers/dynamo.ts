@@ -5,6 +5,7 @@ import {
   ResourceNotFoundException,
   waitUntilTableExists,
 } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
 export const TABELA_TESTE = 'oficina-execution-test';
 
@@ -50,4 +51,10 @@ export async function recriarTabela(cliente: DynamoDBClient, tabela = TABELA_TES
     }),
   );
   await waitUntilTableExists({ client: cliente, maxWaitTime: 30 }, { TableName: tabela });
+}
+
+export function documentoTeste(): DynamoDBDocumentClient {
+  return DynamoDBDocumentClient.from(clienteDynamoTeste(), {
+    marshallOptions: { removeUndefinedValues: true },
+  });
 }
