@@ -5,14 +5,15 @@ import { NodeHttpHandler } from '@smithy/node-http-handler';
 
 import { MessageHandlerRegistry } from './message-handler.registry';
 import { lerMessagingConfig, MESSAGING_CONFIG, MessagingConfig } from './messaging.config';
+import { OutboxLease } from './outbox-lease';
 import { OutboxPublisher } from './outbox.publisher';
 import { SnsSqsTransport, SQS_PUBLICACAO } from './sns-sqs.transport';
 import { SqsInboxConsumer } from './sqs-inbox.consumer';
 
 /**
- * Clientes de publicação rodam dentro da transação da outbox: o pior envio
+ * Clientes de publicação do OutboxPublisher: o pior envio
  * (maxAttempts × (connectionTimeout + requestTimeout)) entra no orçamento do
- * TIMEOUT_TRANSACAO_MS do OutboxPublisher.
+ * lease do publicador (DURACAO_LEASE_MS em outbox-lease.ts).
  */
 const opcoesPublicacao = (config: MessagingConfig) => ({
   region: config.region,
@@ -50,6 +51,7 @@ const opcoesPublicacao = (config: MessagingConfig) => ({
     SnsSqsTransport,
     MessageHandlerRegistry,
     SqsInboxConsumer,
+    OutboxLease,
     OutboxPublisher,
   ],
   exports: [MESSAGING_CONFIG, MessageHandlerRegistry],

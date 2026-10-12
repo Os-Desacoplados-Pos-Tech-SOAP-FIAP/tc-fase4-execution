@@ -1,17 +1,24 @@
 import { SNSClient } from '@aws-sdk/client-sns';
 import { SQSClient } from '@aws-sdk/client-sqs';
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { Global, Module } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { NodeHttpHandlerOptions } from '@smithy/node-http-handler';
 
-import { PrismaService } from '../database/prisma.service';
+import { DYNAMO_CONFIG } from '../dynamo/dynamo.config';
 import { MessagingModule } from './messaging.module';
 import { SnsSqsTransport, SQS_PUBLICACAO } from './sns-sqs.transport';
 import { SqsInboxConsumer } from './sqs-inbox.consumer';
 
 @Global()
-@Module({ providers: [{ provide: PrismaService, useValue: {} }], exports: [PrismaService] })
-class PrismaFalsoModule {}
+@Module({
+  providers: [
+    { provide: DynamoDBDocumentClient, useValue: {} },
+    { provide: DYNAMO_CONFIG, useValue: { tabela: 'tabela-teste' } },
+  ],
+  exports: [DynamoDBDocumentClient, DYNAMO_CONFIG],
+})
+class DynamoFalsoModule {}
 
 // O NodeHttpHandler só resolve as opções na primeira requisição; lê-las da promessa evita
 // fazer uma chamada de rede no teste.
@@ -24,7 +31,7 @@ describe('MessagingModule', () => {
 
   beforeAll(async () => {
     modulo = await Test.createTestingModule({
-      imports: [PrismaFalsoModule, MessagingModule],
+      imports: [DynamoFalsoModule, MessagingModule],
     }).compile();
   });
   afterAll(() => modulo.close());
