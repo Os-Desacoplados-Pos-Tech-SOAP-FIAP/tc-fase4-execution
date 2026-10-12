@@ -180,7 +180,10 @@ export class OrdemExecucao extends AggregateRoot<OrdemExecucaoProps> {
     return duracaoEmMinutos(this.props.reparoIniciadoEm as Date, em);
   }
 
-  /** Controle otimista: o repositório grava `versao + 1` exigindo a versão anterior. */
+  /**
+   * Uso exclusivo do repositório (controle otimista): grava `versao + 1` exigindo a versão
+   * anterior. Chamar fora do `salvar` desalinha a versão e o próximo commit vira conflito.
+   */
   public avancarVersao(): number {
     this.props.versao += 1;
     return this.props.versao;
