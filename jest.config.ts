@@ -19,7 +19,6 @@ const config: Config = {
     '!src/tracing.ts',
     '!src/**/*.module.ts',
     '!src/**/dto/**',
-    '!src/infrastructure/database/seed.ts',
   ],
   coverageThreshold: {
     global: { branches: 80, functions: 80, lines: 80, statements: 80 },
