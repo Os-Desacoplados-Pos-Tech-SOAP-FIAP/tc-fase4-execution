@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { INJECTION_TOKENS } from '../../../common/constants/injection-tokens';
 import { IOrdemExecucaoRepository } from '../../../domain/execucao/repositories/IOrdemExecucaoRepository';
@@ -15,6 +15,8 @@ const MOTIVO = 'diagnóstico concluído sem itens; reaberto pelo orquestrador';
 
 @Injectable()
 export class ReabrirDiagnosticoUseCase {
+  private readonly logger = new Logger(ReabrirDiagnosticoUseCase.name);
+
   constructor(
     @Inject(INJECTION_TOKENS.TRANSACTION_MANAGER) private readonly transacao: ITransactionManager,
     @Inject(INJECTION_TOKENS.PROCESSED_MESSAGE_REPOSITORY)
@@ -36,6 +38,21 @@ export class ReabrirDiagnosticoUseCase {
         );
       }
       if (ordem.status === StatusExecucao.EM_DIAGNOSTICO) return;
+      if (ordem.status !== StatusExecucao.DIAGNOSTICO_CONCLUIDO) {
+        // Comando atrasado frente ao estado atual: reprocessar não muda nada, então não vai para a DLQ.
+        this.logger.warn({
+          msg: 'Reabertura de diagnóstico ignorada: ordem em estado inesperado',
+          osId: input.correlationId,
+          status: ordem.status,
+          messageId: input.messageId,
+        });
+        return;
+      }
+      const mecanicoId = ordem.mecanicoId;
+      if (!mecanicoId) {
+        // Diagnóstico concluído sempre tem mecânico; ausência indica falha no mapeamento.
+        throw new Error(`Ordem da OS ${input.correlationId} com diagnóstico concluído sem mecânico`);
+      }
 
       ordem.reabrirDiagnostico(this.relogio.agora(), MOTIVO);
       await this.ordens.salvar(ordem);
@@ -43,7 +60,7 @@ export class ReabrirDiagnosticoUseCase {
         criarEnvelope<DiagnosticoIniciadoPayload>(
           EXECUTION_EVENTS.DIAGNOSTICO_INICIADO,
           input.correlationId,
-          { osId: input.correlationId, mecanicoId: ordem.mecanicoId as string },
+          { osId: input.correlationId, mecanicoId },
           input.messageId,
         ),
       );
