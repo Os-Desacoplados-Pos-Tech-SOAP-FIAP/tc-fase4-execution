@@ -22,11 +22,12 @@ const PRAZO_NOVOS_ENVIOS_MS = 5_000;
 /**
  * Pior caso de um item depois de iniciado o envio, com os clientes atuais:
  * envio SNS/SQS 2 × (2s + 3s) = 10s + Update/Delete no Dynamo 3 × (2s + 3s) = 15s
- * + recuos entre tentativas do SDK (< 1s) = 26s. Só se inicia um envio até
- * DURACAO_LEASE_MS - margem (30s - 26s = 4s) após o início do ciclo, então o último
- * item termina antes de o lease expirar.
+ * + recuos entre tentativas do SDK com throttling (base 500ms: ~0,5s no envio com
+ * maxAttempts 2 + ~1,5s no Dynamo com maxAttempts 3) ≈ 2s = 27s, arredondado para 28s.
+ * Só se inicia um envio até DURACAO_LEASE_MS - margem (30s - 28s = 2s) após o início do
+ * ciclo, então o último item termina antes de o lease expirar.
  */
-export const MARGEM_SEGURANCA_LEASE_MS = 26_000;
+export const MARGEM_SEGURANCA_LEASE_MS = 28_000;
 /**
  * Limita a leitura de cada ciclo. Limitação conhecida: se houver 500+ itens bloqueados
  * (falhando) em OS de id lexicograficamente menor, os seguintes não são lidos (inanição).
@@ -92,7 +93,7 @@ export class OutboxPublisher implements OnApplicationBootstrap, BeforeApplicatio
    * Novos envios só começam enquanto o ciclo está dentro dos dois prazos, contados do
    * mesmo início (antes de adquirir o lease, cuja validade parte desse instante):
    * PRAZO_NOVOS_ENVIOS_MS e DURACAO_LEASE_MS - MARGEM_SEGURANCA_LEASE_MS. Vale o menor;
-   * com os clientes atuais é o do lease (4s). O que sobrar fica para o próximo ciclo.
+   * com os clientes atuais é o do lease (2s). O que sobrar fica para o próximo ciclo.
    */
   async publicarPendentes(): Promise<number> {
     const inicio = performance.now();
