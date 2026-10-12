@@ -1,0 +1,17 @@
+export enum StatusExecucao {
+  AGUARDANDO_DIAGNOSTICO = 'AGUARDANDO_DIAGNOSTICO',
+  EM_DIAGNOSTICO = 'EM_DIAGNOSTICO',
+  DIAGNOSTICO_CONCLUIDO = 'DIAGNOSTICO_CONCLUIDO',
+  AGUARDANDO_REPARO = 'AGUARDANDO_REPARO',
+  EM_REPARO = 'EM_REPARO',
+  CONCLUIDA = 'CONCLUIDA',
+  EXECUCAO_RECUSADA = 'EXECUCAO_RECUSADA',
+}
+
+/** Status que aparecem na fila do mecânico. */
+export const STATUS_NA_FILA: readonly StatusExecucao[] = [
+  StatusExecucao.AGUARDANDO_DIAGNOSTICO,
+  StatusExecucao.EM_DIAGNOSTICO,
+  StatusExecucao.AGUARDANDO_REPARO,
+  StatusExecucao.EM_REPARO,
+];
