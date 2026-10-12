@@ -85,6 +85,19 @@ describe('Execution (e2e)', () => {
     await http().get(`${base}/metricas/tempo-medio`).set('Authorization', admin).expect(200);
   });
 
+  it('reabrir diagnóstico volta a OS para EM_DIAGNOSTICO e registra novo diagnostico-iniciado', async () => {
+    await ateDiagnosticoConcluido(OS_1);
+    await registry.despachar(criarEnvelope(EXECUTION_COMMANDS.REABRIR_DIAGNOSTICO, OS_1, {}));
+
+    await http().get(`${base}/ordens/${OS_1}`).set('Authorization', mecanico).expect(200)
+      .expect((res) => {
+        expect(res.body.ordem.status).toBe('EM_DIAGNOSTICO');
+        expect(res.body.ordem.mecanicoId).toBe('mec-1');
+      });
+    const tipos = await tiposNaOutbox(OS_1);
+    expect(tipos.filter((t) => t === EXECUTION_EVENTS.DIAGNOSTICO_INICIADO)).toHaveLength(2);
+  });
+
   it('pivô recusa quando a oficina está cheia (EXECUTION_MAX_CONCURRENT=2)', async () => {
     for (const os of [OS_1, OS_2, OS_3]) {
       await ateDiagnosticoConcluido(os);
