@@ -18,13 +18,13 @@ describe('AllExceptionsFilter', () => {
 
   it('DomainError vira 422 com code', () => {
     const { host, response } = criarHost();
-    filtro.catch(new DomainError('Estoque insuficiente', 'ESTOQUE_INSUFICIENTE'), host);
+    filtro.catch(new DomainError('Capacidade de execução esgotada', 'CAPACIDADE_ESGOTADA'), host);
     expect(response.status).toHaveBeenCalledWith(422);
     expect(response.json).toHaveBeenCalledWith({
       statusCode: 422,
       error: 'Unprocessable Entity',
-      code: 'ESTOQUE_INSUFICIENTE',
-      message: 'Estoque insuficiente',
+      code: 'CAPACIDADE_ESGOTADA',
+      message: 'Capacidade de execução esgotada',
     });
   });
 
@@ -42,12 +42,12 @@ describe('AllExceptionsFilter', () => {
 
   it('ConflitoError vira 409 com code', () => {
     const { host, response } = criarHost();
-    filtro.catch(new ConflitoError('Já existe', 'INSUMO_CODIGO_DUPLICADO'), host);
+    filtro.catch(new ConflitoError('Já existe', 'CONCORRENCIA'), host);
     expect(response.status).toHaveBeenCalledWith(409);
     expect(response.json).toHaveBeenCalledWith({
       statusCode: 409,
       error: 'Conflict',
-      code: 'INSUMO_CODIGO_DUPLICADO',
+      code: 'CONCORRENCIA',
       message: 'Já existe',
     });
   });

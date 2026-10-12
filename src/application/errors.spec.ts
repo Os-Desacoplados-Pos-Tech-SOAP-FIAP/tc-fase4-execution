@@ -20,6 +20,6 @@ describe('erros de aplicação', () => {
   });
 
   it('ConflitoError aceita code específico', () => {
-    expect(new ConflitoError('Duplicado', 'INSUMO_CODIGO_DUPLICADO').code).toBe('INSUMO_CODIGO_DUPLICADO');
+    expect(new ConflitoError('Conflito de concorrência', 'CONCORRENCIA').code).toBe('CONCORRENCIA');
   });
 });

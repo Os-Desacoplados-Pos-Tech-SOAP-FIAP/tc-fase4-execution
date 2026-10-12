@@ -2,7 +2,7 @@ import { lerEnvelope, MensagemInvalidaError } from './message-envelope.parser';
 
 const valido = {
   messageId: 'm1',
-  type: 'catalog.reservar-insumos.v1',
+  type: 'execution.enfileirar-execucao.v1',
   occurredAt: '2026-10-20T10:00:00.000Z',
   correlationId: 'os-1',
   payload: { itens: [] },

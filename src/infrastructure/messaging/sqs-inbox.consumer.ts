@@ -46,7 +46,7 @@ export class SqsInboxConsumer implements OnApplicationBootstrap, BeforeApplicati
   }
 
   /**
-   * Roda antes do Prisma desconectar: interrompe o long-poll pendente (até 20s) e espera
+   * Roda antes de o banco/clientes encerrarem: interrompe o long-poll pendente (até 20s) e espera
    * o lote em processamento terminar.
    */
   async beforeApplicationShutdown(): Promise<void> {

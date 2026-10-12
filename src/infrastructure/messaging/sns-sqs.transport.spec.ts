@@ -9,7 +9,7 @@ describe('SnsSqsTransport', () => {
   const sns = mockClient(SNSClient);
   const sqs = mockClient(SQSClient);
   const transporte = new SnsSqsTransport(new SNSClient({}), new SQSClient({}));
-  const envelope = criarEnvelope('catalog.x.v1', 'os-1', { a: 1 });
+  const envelope = criarEnvelope('execution.x.v1', 'os-1', { a: 1 });
 
   beforeEach(() => {
     sns.reset();
@@ -17,13 +17,13 @@ describe('SnsSqsTransport', () => {
   });
 
   it('publica no tópico FIFO com grupo = OS e deduplicação = messageId', async () => {
-    await transporte.enviar('arn:aws:sns:us-east-1:1:oficina-catalog-events.fifo', envelope);
+    await transporte.enviar('arn:aws:sns:us-east-1:1:oficina-execution-events.fifo', envelope);
     const chamada = sns.commandCalls(PublishCommand)[0].args[0].input;
     expect(chamada).toMatchObject({
-      TopicArn: 'arn:aws:sns:us-east-1:1:oficina-catalog-events.fifo',
+      TopicArn: 'arn:aws:sns:us-east-1:1:oficina-execution-events.fifo',
       MessageGroupId: 'os-1',
       MessageDeduplicationId: envelope.messageId,
-      MessageAttributes: { type: { DataType: 'String', StringValue: 'catalog.x.v1' } },
+      MessageAttributes: { type: { DataType: 'String', StringValue: 'execution.x.v1' } },
     });
     expect(JSON.parse(chamada.Message!)).toEqual(envelope);
     expect(sqs.commandCalls(SendMessageCommand)).toHaveLength(0);
@@ -34,7 +34,7 @@ describe('SnsSqsTransport', () => {
     await transporte.enviar('arn:aws:sns:us-east-1:1:t.fifo', envelope, traceparent);
     await transporte.enviar('https://sqs.us-east-1.amazonaws.com/1/fila.fifo', envelope, traceparent);
     const esperado = {
-      type: { DataType: 'String', StringValue: 'catalog.x.v1' },
+      type: { DataType: 'String', StringValue: 'execution.x.v1' },
       traceparent: { DataType: 'String', StringValue: traceparent },
     };
     expect(sns.commandCalls(PublishCommand)[0].args[0].input.MessageAttributes).toEqual(esperado);
@@ -44,7 +44,7 @@ describe('SnsSqsTransport', () => {
   it('sem traceparent (null) envia só o atributo type', async () => {
     await transporte.enviar('arn:aws:sns:us-east-1:1:t.fifo', envelope, null);
     expect(sns.commandCalls(PublishCommand)[0].args[0].input.MessageAttributes).toEqual({
-      type: { DataType: 'String', StringValue: 'catalog.x.v1' },
+      type: { DataType: 'String', StringValue: 'execution.x.v1' },
     });
   });
 
