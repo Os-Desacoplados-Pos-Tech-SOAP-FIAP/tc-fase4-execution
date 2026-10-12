@@ -7,8 +7,13 @@ import { Inject, Injectable } from '@nestjs/common';
 import { chaves } from '../dynamo/chaves';
 import { DYNAMO_CONFIG, DynamoConfig } from '../dynamo/dynamo.config';
 
-/** Maior que o pior ciclo (5s de prazo + 2 × (2s + 3s) de envio): o dono não perde no meio. */
-const DURACAO_LEASE_MS = 30_000;
+/**
+ * Maior que o pior ciclo, contado desde antes de adquirir o lease: novos envios só começam
+ * até 30s - 26s = 4s; o último item leva no pior caso 26s (envio SNS/SQS 2 × (2s + 3s) +
+ * Update/Delete no Dynamo 3 × (2s + 3s) + recuos). Ver MARGEM_SEGURANCA_LEASE_MS em
+ * outbox.publisher.ts. Não cobre diferença de relógio entre réplicas.
+ */
+export const DURACAO_LEASE_MS = 30_000;
 
 /** Elege um único publicador da outbox entre as réplicas (substitui o advisory lock do Postgres). */
 @Injectable()

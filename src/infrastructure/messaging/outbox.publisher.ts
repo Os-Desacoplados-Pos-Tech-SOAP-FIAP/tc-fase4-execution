@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { DeleteCommand, DynamoDBDocumentClient, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import {
   BeforeApplicationShutdown,
@@ -13,11 +14,24 @@ import { MessageEnvelope } from '../../application/ports/message-envelope';
 import { DYNAMO_CONFIG, DynamoConfig } from '../dynamo/dynamo.config';
 import { erroParaLog } from './erro-para-log';
 import { MESSAGING_CONFIG, MessagingConfig } from './messaging.config';
-import { OutboxLease } from './outbox-lease';
+import { DURACAO_LEASE_MS, OutboxLease } from './outbox-lease';
 import { SnsSqsTransport } from './sns-sqs.transport';
 
 const INTERVALO_MS = 1000;
 const PRAZO_NOVOS_ENVIOS_MS = 5_000;
+/**
+ * Pior caso de um item depois de iniciado o envio, com os clientes atuais:
+ * envio SNS/SQS 2 × (2s + 3s) = 10s + Update/Delete no Dynamo 3 × (2s + 3s) = 15s
+ * + recuos entre tentativas do SDK (< 1s) = 26s. Só se inicia um envio até
+ * DURACAO_LEASE_MS - margem (30s - 26s = 4s) após o início do ciclo, então o último
+ * item termina antes de o lease expirar.
+ */
+export const MARGEM_SEGURANCA_LEASE_MS = 26_000;
+/**
+ * Limita a leitura de cada ciclo. Limitação conhecida: se houver 500+ itens bloqueados
+ * (falhando) em OS de id lexicograficamente menor, os seguintes não são lidos (inanição).
+ * Improvável com ids UUID e poucos eventos por OS.
+ */
 const MAXIMO_ITENS_POR_CICLO = 500;
 const TAMANHO_MAXIMO_ERRO = 500;
 
@@ -74,14 +88,21 @@ export class OutboxPublisher implements OnApplicationBootstrap, BeforeApplicatio
     }
   }
 
+  /**
+   * Novos envios só começam enquanto o ciclo está dentro dos dois prazos, contados do
+   * mesmo início (antes de adquirir o lease, cuja validade parte desse instante):
+   * PRAZO_NOVOS_ENVIOS_MS e DURACAO_LEASE_MS - MARGEM_SEGURANCA_LEASE_MS. Vale o menor;
+   * com os clientes atuais é o do lease (4s). O que sobrar fica para o próximo ciclo.
+   */
   async publicarPendentes(): Promise<number> {
+    const inicio = performance.now();
     if (!(await this.lease.adquirir())) return 0;
 
-    const inicio = performance.now();
+    const prazo = Math.min(PRAZO_NOVOS_ENVIOS_MS, DURACAO_LEASE_MS - MARGEM_SEGURANCA_LEASE_MS);
     let total = 0;
     for (const grupo of this.ordenarGrupos(await this.pendentes())) {
       for (const item of grupo) {
-        if (performance.now() - inicio > PRAZO_NOVOS_ENVIOS_MS) return total;
+        if (performance.now() - inicio > prazo) return total;
         if (!(await this.enviar(item))) break; // falhou: o resto desta OS espera
         total += 1;
       }
@@ -99,6 +120,7 @@ export class OutboxPublisher implements OnApplicationBootstrap, BeforeApplicatio
           KeyConditionExpression: 'PK = :pk',
           ExpressionAttributeValues: { ':pk': 'OUTBOX' },
           ExclusiveStartKey: inicio,
+          ConsistentRead: true,
         }),
       );
       itens.push(...((pagina.Items ?? []) as ItemOutbox[]));
@@ -111,7 +133,9 @@ export class OutboxPublisher implements OnApplicationBootstrap, BeforeApplicatio
   private ordenarGrupos(itens: ItemOutbox[]): ItemOutbox[][] {
     const grupos = new Map<string, ItemOutbox[]>();
     for (const item of itens) {
-      grupos.set(item.groupId, [...(grupos.get(item.groupId) ?? []), item]);
+      const grupo = grupos.get(item.groupId);
+      if (grupo) grupo.push(item);
+      else grupos.set(item.groupId, [item]);
     }
     return [...grupos.values()].sort(
       (a, b) => Number(a[0].tentativas > 0) - Number(b[0].tentativas > 0),
@@ -129,22 +153,39 @@ export class OutboxPublisher implements OnApplicationBootstrap, BeforeApplicatio
         osId: item.groupId,
         err: erroParaLog(erro),
       });
-      await this.doc.send(
+      await this.ignorarSeJaApagado(
         new UpdateCommand({
           TableName: this.dynamo.tabela,
           Key: { PK: item.PK, SK: item.SK },
           UpdateExpression: 'ADD tentativas :um SET ultimoErro = :erro',
+          ConditionExpression: 'attribute_exists(PK)',
           ExpressionAttributeValues: {
             ':um': 1,
-            ':erro': (erro as Error).message.slice(0, TAMANHO_MAXIMO_ERRO),
+            ':erro': erroParaLog(erro).message.slice(0, TAMANHO_MAXIMO_ERRO),
           },
         }),
       );
       return false;
     }
-    await this.doc.send(
-      new DeleteCommand({ TableName: this.dynamo.tabela, Key: { PK: item.PK, SK: item.SK } }),
+    await this.ignorarSeJaApagado(
+      new DeleteCommand({
+        TableName: this.dynamo.tabela,
+        Key: { PK: item.PK, SK: item.SK },
+        ConditionExpression: 'attribute_exists(PK)',
+      }),
     );
     return true;
+  }
+
+  /**
+   * Item sumido = outro ciclo/réplica já o publicou e apagou. Sem a condição, o Update
+   * recriaria um item só com chave e contadores, que travaria a outbox.
+   */
+  private async ignorarSeJaApagado(comando: UpdateCommand | DeleteCommand): Promise<void> {
+    try {
+      await this.doc.send(comando);
+    } catch (erro) {
+      if (!(erro instanceof ConditionalCheckFailedException)) throw erro;
+    }
   }
 }

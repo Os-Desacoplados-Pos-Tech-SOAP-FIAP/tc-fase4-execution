@@ -1,9 +1,13 @@
+import { performance } from 'node:perf_hooks';
+
+import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { Logger } from '@nestjs/common';
 
 import { lerDynamoConfig } from '../dynamo/dynamo.config';
 import { lerMessagingConfig } from './messaging.config';
-import { OutboxLease } from './outbox-lease';
-import { OutboxPublisher } from './outbox.publisher';
+import { DURACAO_LEASE_MS, OutboxLease } from './outbox-lease';
+import { MARGEM_SEGURANCA_LEASE_MS, OutboxPublisher } from './outbox.publisher';
+import { SnsSqsTransport } from './sns-sqs.transport';
 
 function adiado() {
   let resolver!: (valor: number) => void;
@@ -112,5 +116,63 @@ describe('OutboxPublisher (ciclo de vida)', () => {
     await encerramento;
     expect(encerrado).toBe(true);
     expect(lease.liberar).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OutboxPublisher (prazo do lease)', () => {
+  const limite = DURACAO_LEASE_MS - MARGEM_SEGURANCA_LEASE_MS;
+  let agora: number;
+
+  beforeEach(() => {
+    agora = 0;
+    jest.spyOn(performance, 'now').mockImplementation(() => agora);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  const criar = (adquirir: () => Promise<boolean>, enviar: () => Promise<void>) => {
+    const itens = [1, 2, 3, 4, 5].map((n) => ({
+      PK: 'OUTBOX',
+      SK: `os-${n}#0000000001#000#m-${n}`,
+      groupId: `os-${n}`,
+      type: 't',
+      destination: 'arn',
+      body: { messageId: `m-${n}` },
+      tentativas: 0,
+    }));
+    const doc = {
+      send: jest.fn(async (comando: unknown) => (comando instanceof QueryCommand ? { Items: itens } : {})),
+    };
+    const transporte = { enviar: jest.fn(enviar) };
+    const publisher = new OutboxPublisher(
+      doc as unknown as DynamoDBDocumentClient,
+      transporte as unknown as SnsSqsTransport,
+      { adquirir: jest.fn(adquirir) } as unknown as OutboxLease,
+      lerDynamoConfig({}),
+      lerMessagingConfig({}),
+    );
+    return { publisher, transporte };
+  };
+
+  it('para de iniciar envios quando o tempo do ciclo passa do limite seguro do lease', async () => {
+    const { publisher, transporte } = criar(
+      async () => true,
+      async () => {
+        agora += limite * 0.4; // envios em 0, 0,4L e 0,8L; o quarto (1,2L) já passou do limite
+      },
+    );
+    expect(await publisher.publicarPendentes()).toBe(3);
+    expect(transporte.enviar).toHaveBeenCalledTimes(3);
+  });
+
+  it('conta o tempo gasto para adquirir o lease', async () => {
+    const { publisher, transporte } = criar(
+      async () => {
+        agora += limite + 1;
+        return true;
+      },
+      async () => undefined,
+    );
+    expect(await publisher.publicarPendentes()).toBe(0);
+    expect(transporte.enviar).not.toHaveBeenCalled();
   });
 });

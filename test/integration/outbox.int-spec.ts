@@ -1,10 +1,11 @@
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
 import { criarEnvelope, MessageEnvelope } from '../../src/application/ports/message-envelope';
+import { chaves } from '../../src/infrastructure/dynamo/chaves';
 import { lerDynamoConfig } from '../../src/infrastructure/dynamo/dynamo.config';
 import { DynamoUnitOfWork } from '../../src/infrastructure/dynamo/dynamo-unit-of-work';
 import { lerMessagingConfig } from '../../src/infrastructure/messaging/messaging.config';
-import { OutboxLease } from '../../src/infrastructure/messaging/outbox-lease';
+import { DURACAO_LEASE_MS, OutboxLease } from '../../src/infrastructure/messaging/outbox-lease';
 import { OutboxPublisher } from '../../src/infrastructure/messaging/outbox.publisher';
 import { SnsSqsTransport } from '../../src/infrastructure/messaging/sns-sqs.transport';
 import { DynamoOutbox } from '../../src/infrastructure/repositories/DynamoOutbox';
@@ -45,6 +46,11 @@ describe('Outbox DynamoDB (integração)', () => {
         }),
       )
     ).Items ?? [];
+  const apagarPendentes = async () => {
+    for (const { PK, SK } of await pendentes()) {
+      await doc.send(new DeleteCommand({ TableName: TABELA_TESTE, Key: { PK, SK } }));
+    }
+  };
 
   beforeEach(async () => {
     await limparTabela(doc);
@@ -116,5 +122,51 @@ describe('Outbox DynamoDB (integração)', () => {
     expect(await publicador().publicarPendentes()).toBe(0); // outro dono, lease válido
     await lease.liberar();
     expect(await publicador().publicarPendentes()).toBe(1);
+  });
+
+  it('falha de envio de item já apagado por outro ciclo não recria o item', async () => {
+    await gravar('os-1', 1, 't.a');
+    enviar.mockImplementation(async () => {
+      await apagarPendentes(); // outro ciclo/réplica publicou e apagou no meio
+      throw new Error('sns fora');
+    });
+    expect(await publicador().publicarPendentes()).toBe(0);
+    expect(await pendentes()).toHaveLength(0);
+  });
+
+  it('envio de item já apagado por outro ciclo não falha o ciclo', async () => {
+    await gravar('os-1', 1, 't.a');
+    enviar.mockImplementationOnce(async () => apagarPendentes());
+    expect(await publicador().publicarPendentes()).toBe(1);
+    expect(await pendentes()).toHaveLength(0);
+  });
+
+  describe('lease', () => {
+    const agora = Date.now();
+
+    it('outra réplica assume logo depois que o lease expira', async () => {
+      const a = new OutboxLease(doc, dynamo);
+      const b = new OutboxLease(doc, dynamo);
+      expect(await a.adquirir(agora)).toBe(true);
+      expect(await b.adquirir(agora + DURACAO_LEASE_MS + 1)).toBe(true);
+      expect(await a.adquirir(agora + DURACAO_LEASE_MS + 1)).toBe(false);
+    });
+
+    it('outra réplica não assume enquanto o lease vale', async () => {
+      const a = new OutboxLease(doc, dynamo);
+      const b = new OutboxLease(doc, dynamo);
+      expect(await a.adquirir(agora)).toBe(true);
+      expect(await b.adquirir(agora + DURACAO_LEASE_MS - 1000)).toBe(false);
+    });
+
+    it('liberar de quem não é dono não apaga o lease', async () => {
+      const a = new OutboxLease(doc, dynamo);
+      const b = new OutboxLease(doc, dynamo);
+      expect(await a.adquirir(agora)).toBe(true);
+      await b.liberar();
+      const lock = await doc.send(new GetCommand({ TableName: TABELA_TESTE, Key: chaves.lockOutbox }));
+      expect(lock.Item).toBeDefined();
+      expect(await b.adquirir(agora)).toBe(false);
+    });
   });
 });
