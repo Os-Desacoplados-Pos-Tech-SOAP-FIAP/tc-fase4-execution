@@ -18,7 +18,7 @@ export interface UsuarioAutenticado {
 }
 
 /**
- * Valida o JWT único da Fase 4 só pela assinatura e pelas claims: o Catalog não tem
+ * Valida o JWT único da Fase 4 só pela assinatura e pelas claims: este serviço não tem
  * tabela de usuários (quem emite o token é o OS Service ou a Lambda de CPF).
  */
 @Injectable()
