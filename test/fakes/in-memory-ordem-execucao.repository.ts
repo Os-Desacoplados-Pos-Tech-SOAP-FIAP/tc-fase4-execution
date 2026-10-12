@@ -1,3 +1,4 @@
+import { ConflitoError } from '../../src/application/errors';
 import { OrdemExecucao, TransicaoExecucao } from '../../src/domain/execucao/entities/OrdemExecucao';
 import { IOrdemExecucaoRepository } from '../../src/domain/execucao/repositories/IOrdemExecucaoRepository';
 import { StatusExecucao } from '../../src/domain/execucao/value-objects/StatusExecucao';
@@ -20,6 +21,8 @@ function clonar(ordem: OrdemExecucao): OrdemExecucao {
       reparoIniciadoEm: ordem.reparoIniciadoEm,
       concluidoEm: ordem.concluidoEm,
       versao: ordem.versao,
+      criadoEm: ordem.criadoEm,
+      atualizadoEm: ordem.atualizadoEm,
     },
     ordem.id,
   );
@@ -38,7 +41,7 @@ export class InMemoryOrdemExecucaoRepository
   async salvar(ordem: OrdemExecucao): Promise<void> {
     const atual = this.ordens.get(ordem.osId);
     if ((atual?.versao ?? 0) !== ordem.versao) {
-      throw new Error(`conflito de versão na OS ${ordem.osId}`);
+      throw new ConflitoError(`conflito de versão na OS ${ordem.osId}`);
     }
     const transicoes = ordem.pullTransicoes();
     ordem.avancarVersao();

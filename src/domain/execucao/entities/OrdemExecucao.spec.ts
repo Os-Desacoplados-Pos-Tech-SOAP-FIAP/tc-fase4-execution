@@ -102,6 +102,14 @@ describe('OrdemExecucao', () => {
     expect(() => ordem.iniciarDiagnostico('', t(1))).toThrow(
       expect.objectContaining({ code: 'MECANICO_OBRIGATORIO' }),
     );
+
+    ordem.iniciarDiagnostico(MECANICO, t(1));
+    ordem.concluirDiagnostico(t(2));
+    ordem.aceitarExecucao(ITENS, t(3));
+    expect(() => ordem.iniciarReparo('', t(4))).toThrow(
+      expect.objectContaining({ code: 'MECANICO_OBRIGATORIO' }),
+    );
+    expect(ordem.status).toBe(StatusExecucao.AGUARDANDO_REPARO);
   });
 
   it('rejeita itens repetidos no aceite', () => {
