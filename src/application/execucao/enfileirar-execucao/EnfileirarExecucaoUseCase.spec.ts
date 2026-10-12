@@ -1,5 +1,6 @@
 import { OrdemExecucao } from '../../../domain/execucao/entities/OrdemExecucao';
 import { StatusExecucao } from '../../../domain/execucao/value-objects/StatusExecucao';
+import { DomainError } from '../../../domain/shared/DomainError';
 import { cenario } from '../../../../test/fakes/cenario';
 import { EXECUTION_EVENTS } from '../execution-messages';
 import { EnfileirarExecucaoUseCase } from './EnfileirarExecucaoUseCase';
@@ -63,6 +64,8 @@ describe('EnfileirarExecucaoUseCase (pivô da saga)', () => {
       type: EXECUTION_EVENTS.EXECUCAO_RECUSADA,
       payload: { motivo: 'ORDEM_NAO_ENCONTRADA' },
     });
+    expect(c.ordens.ordens.size).toBe(0);
+    expect(c.processadas.ids.has(`cmd-${OS_A}`)).toBe(true);
   });
 
   it('recusa OS em estado inválido (ainda em diagnóstico) sem alterar a ordem', async () => {
@@ -99,5 +102,51 @@ describe('EnfileirarExecucaoUseCase (pivô da saga)', () => {
     await expect(useCase.execute(comando(OS_A))).rejects.toThrow('conflito na gravação');
     expect(c.processadas.ids.size).toBe(0);
     expect((await c.ordens.buscarPorOs(OS_A))!.status).toBe(StatusExecucao.DIAGNOSTICO_CONCLUIDO);
+  });
+
+  it('nunca publica recusa para OS já aceita: reconfirma o aceite', async () => {
+    for (const os of [OS_A, OS_B, OS_C]) await prontaParaAceite(os);
+    await useCase.execute(comando(OS_B));
+    await useCase.execute(comando(OS_C));
+    const pronta = (await c.ordens.buscarPorOs(OS_A))!;
+    const aceita = (await c.ordens.buscarPorOs(OS_A))!;
+    aceita.aceitarExecucao(ITENS, c.relogio.agora());
+    jest
+      .spyOn(c.ordens, 'buscarPorOs')
+      .mockResolvedValueOnce(pronta)
+      .mockResolvedValueOnce(aceita);
+    c.outbox.mensagens = [];
+
+    await useCase.execute(comando(OS_A));
+
+    expect(c.outbox.tipos()).toEqual([EXECUTION_EVENTS.EXECUCAO_ACEITA]);
+  });
+
+  it('erro de domínio fora do contrato de recusa propaga (retentativa/DLQ)', async () => {
+    await prontaParaAceite(OS_A);
+    await expect(
+      useCase.execute({ ...comando(OS_A), itens: [ITENS[0], ITENS[0]] }),
+    ).rejects.toMatchObject({ code: 'ITEM_DUPLICADO' });
+    expect(c.outbox.mensagens).toHaveLength(0);
+    expect((await c.ordens.buscarPorOs(OS_A))!.status).toBe(StatusExecucao.DIAGNOSTICO_CONCLUIDO);
+    expect(c.processadas.ids.size).toBe(0);
+  });
+
+  it('vaga perdida no commit (CAPACIDADE_ESGOTADA na gravação) vira recusa', async () => {
+    await prontaParaAceite(OS_A);
+    jest
+      .spyOn(c.capacidade, 'ocupar')
+      .mockRejectedValueOnce(
+        new DomainError('Capacidade de execução esgotada', 'CAPACIDADE_ESGOTADA'),
+      );
+    await useCase.execute(comando(OS_A));
+    expect((await c.ordens.buscarPorOs(OS_A))!.status).toBe(StatusExecucao.EXECUCAO_RECUSADA);
+    expect(c.capacidade.ocupadas).toBe(0);
+    expect(c.outbox.mensagens).toEqual([
+      expect.objectContaining({
+        type: EXECUTION_EVENTS.EXECUCAO_RECUSADA,
+        payload: expect.objectContaining({ osId: OS_A, motivo: 'CAPACIDADE_ESGOTADA' }),
+      }),
+    ]);
   });
 });

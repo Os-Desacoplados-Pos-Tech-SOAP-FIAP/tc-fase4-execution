@@ -14,6 +14,7 @@ import {
   EXECUTION_EVENTS,
   ExecucaoRecusadaPayload,
   ItemExecucaoPayload,
+  MOTIVOS_RECUSA,
   OsPayload,
 } from '../execution-messages';
 
@@ -23,15 +24,19 @@ const JA_ACEITA: readonly StatusExecucao[] = [
   StatusExecucao.CONCLUIDA,
 ];
 
+function ehMotivoDeRecusa(erro: unknown): erro is DomainError {
+  return erro instanceof DomainError && (MOTIVOS_RECUSA as readonly string[]).includes(erro.code);
+}
+
 export interface EnfileirarExecucaoInput extends ContextoMensagem {
   itens: ItemExecucaoPayload[];
 }
 
 /**
- * Transação pivô da saga. Recusa de negócio (capacidade, OS desconhecida ou fora de
- * estado) vira execucao-recusada numa segunda transação e a saga compensa; erro de
- * infraestrutura (inclusive a vaga tomada por outra réplica no commit) propaga para a
- * mensagem ser retentada e reavaliada.
+ * Transação pivô da saga. Só os motivos do contrato (MOTIVOS_RECUSA: capacidade — inclusive
+ * a vaga tomada por outra réplica no commit —, OS desconhecida ou fora de estado) viram
+ * execucao-recusada numa segunda transação e a saga compensa; qualquer outro erro propaga
+ * para a mensagem ser retentada ou ir para a DLQ.
  */
 @Injectable()
 export class EnfileirarExecucaoUseCase {
@@ -52,7 +57,7 @@ export class EnfileirarExecucaoUseCase {
     try {
       await this.transacao.run(() => this.aceitar(input));
     } catch (erro) {
-      if (!(erro instanceof DomainError)) throw erro;
+      if (!ehMotivoDeRecusa(erro)) throw erro;
       await this.transacao.run(() => this.recusar(input, erro));
     }
   }
@@ -82,6 +87,10 @@ export class EnfileirarExecucaoUseCase {
       await this.capacidade.ocupar(this.config.capacidadeMaxima);
     }
 
+    await this.publicarAceite(input);
+  }
+
+  private async publicarAceite(input: EnfileirarExecucaoInput): Promise<void> {
     await this.outbox.publicar(
       criarEnvelope<OsPayload>(
         EXECUTION_EVENTS.EXECUCAO_ACEITA,
@@ -96,6 +105,11 @@ export class EnfileirarExecucaoUseCase {
     if (!(await this.mensagensProcessadas.registrar(input.messageId))) return;
 
     const ordem = await this.ordens.buscarPorOs(input.correlationId);
+    // Outra entrega aceitou a OS entre as duas transações: depois do pivô não há recusa.
+    if (ordem && JA_ACEITA.includes(ordem.status)) {
+      await this.publicarAceite(input);
+      return;
+    }
     if (ordem?.status === StatusExecucao.DIAGNOSTICO_CONCLUIDO) {
       ordem.recusarExecucao(erro.code, this.relogio.agora());
       await this.ordens.salvar(ordem);

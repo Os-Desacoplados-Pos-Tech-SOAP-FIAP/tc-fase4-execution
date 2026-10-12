@@ -14,6 +14,15 @@ export const EXECUTION_EVENTS = {
   EXECUCAO_CONCLUIDA: 'execution.execucao-concluida.v1',
 } as const;
 
+/** Contrato: só estes motivos viram execucao-recusada; o orquestrador compensa por eles. */
+export const MOTIVOS_RECUSA = [
+  'CAPACIDADE_ESGOTADA',
+  'ORDEM_NAO_ENCONTRADA',
+  'ORDEM_EM_ESTADO_INVALIDO',
+] as const;
+
+export type MotivoRecusa = (typeof MOTIVOS_RECUSA)[number];
+
 export interface ItemExecucaoPayload {
   itemId: string;
   servicoId: string;
