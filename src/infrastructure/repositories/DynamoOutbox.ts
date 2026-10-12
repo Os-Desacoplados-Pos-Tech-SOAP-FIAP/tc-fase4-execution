@@ -11,6 +11,9 @@ import { MESSAGING_CONFIG, MessagingConfig } from '../messaging/messaging.config
 /**
  * A chave ordena a outbox por OS: versão da ordem gravada/lida na transação + índice
  * dentro dela. Transações de uma mesma OS são serializadas pela versão otimista.
+ * Transações só de leitura (ex.: recusa sem salvar a ordem) não incrementam a versão e
+ * podem empatar em `versao#indice`; entre elas a ordem fica pelo messageId. Inofensivo:
+ * são respostas equivalentes.
  */
 @Injectable()
 export class DynamoOutbox implements IOutbox {
