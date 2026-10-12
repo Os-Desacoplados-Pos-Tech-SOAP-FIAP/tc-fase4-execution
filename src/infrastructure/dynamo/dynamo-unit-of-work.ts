@@ -12,6 +12,7 @@ import { ITransactionManager } from '../../application/ports/transaction-manager
 import { ConcorrenciaError } from './concorrencia.error';
 
 export type OperacaoDynamo = NonNullable<TransactWriteCommandInput['TransactItems']>[number];
+export type ErroSeCondicaoFalhar = () => Error;
 
 const LIMITE_TRANSACAO = 100;
 /** Condição violada ou outra transação mexendo nos mesmos itens ao mesmo tempo. */
@@ -19,6 +20,8 @@ const CONFLITOS = new Set(['ConditionalCheckFailed', 'TransactionConflict']);
 
 interface Contexto {
   operacoes: OperacaoDynamo[];
+  /** Paralelo a `operacoes`: o índice do CancellationReasons aponta a operação que falhou. */
+  errosSeCondicaoFalhar: (ErroSeCondicaoFalhar | undefined)[];
   versoes: Map<string, number>;
   indices: Map<string, number>;
 }
@@ -36,14 +39,25 @@ export class DynamoUnitOfWork implements ITransactionManager {
 
   async run<T>(work: () => Promise<T>): Promise<T> {
     if (this.contexto.getStore()) return work();
-    const contexto: Contexto = { operacoes: [], versoes: new Map(), indices: new Map() };
+    const contexto: Contexto = {
+      operacoes: [],
+      errosSeCondicaoFalhar: [],
+      versoes: new Map(),
+      indices: new Map(),
+    };
     const resultado = await this.contexto.run(contexto, work);
-    await this.confirmar(contexto.operacoes);
+    await this.confirmar(contexto);
     return resultado;
   }
 
-  adicionar(operacao: OperacaoDynamo): void {
-    this.atual().operacoes.push(operacao);
+  /**
+   * `erroSeCondicaoFalhar` traduz a condição violada desta operação numa regra de negócio
+   * (ex.: vaga tomada por outra réplica), em vez do ConcorrenciaError genérico.
+   */
+  adicionar(operacao: OperacaoDynamo, erroSeCondicaoFalhar?: ErroSeCondicaoFalhar): void {
+    const contexto = this.atual();
+    contexto.operacoes.push(operacao);
+    contexto.errosSeCondicaoFalhar.push(erroSeCondicaoFalhar);
   }
 
   /** Versão da ordem gravada (ou lida) nesta transação, usada para ordenar a outbox. */
@@ -70,7 +84,7 @@ export class DynamoUnitOfWork implements ITransactionManager {
     return contexto;
   }
 
-  private async confirmar(operacoes: OperacaoDynamo[]): Promise<void> {
+  private async confirmar({ operacoes, errosSeCondicaoFalhar }: Contexto): Promise<void> {
     if (operacoes.length === 0) return;
     if (operacoes.length > LIMITE_TRANSACAO) {
       throw new Error(`Transação com ${operacoes.length} escritas (limite ${LIMITE_TRANSACAO})`);
@@ -79,6 +93,12 @@ export class DynamoUnitOfWork implements ITransactionManager {
       await this.doc.send(new TransactWriteCommand({ TransactItems: operacoes }));
     } catch (erro) {
       const motivos = erro instanceof TransactionCanceledException ? erro.CancellationReasons ?? [] : [];
+      const fabricaDeErro = motivos
+        .map((motivo, indice) =>
+          motivo.Code === 'ConditionalCheckFailed' ? errosSeCondicaoFalhar[indice] : undefined,
+        )
+        .find((fabrica) => fabrica !== undefined);
+      if (fabricaDeErro) throw fabricaDeErro();
       if (motivos.some((motivo) => CONFLITOS.has(motivo.Code ?? ''))) {
         throw new ConcorrenciaError('outra operação alterou os mesmos itens');
       }

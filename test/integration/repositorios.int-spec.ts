@@ -1,5 +1,8 @@
+import { GetCommand } from '@aws-sdk/lib-dynamodb';
+
 import { OrdemExecucao } from '../../src/domain/execucao/entities/OrdemExecucao';
 import { StatusExecucao } from '../../src/domain/execucao/value-objects/StatusExecucao';
+import { DomainError } from '../../src/domain/shared/DomainError';
 import { lerDynamoConfig } from '../../src/infrastructure/dynamo/dynamo.config';
 import { ConcorrenciaError } from '../../src/infrastructure/dynamo/concorrencia.error';
 import { DynamoUnitOfWork } from '../../src/infrastructure/dynamo/dynamo-unit-of-work';
@@ -106,8 +109,23 @@ describe('Repositórios DynamoDB (integração)', () => {
       await uow.run(() => capacidade.ocupar(2));
       await uow.run(() => capacidade.ocupar(2));
       expect(await capacidade.ativos()).toBe(2);
-      await expect(uow.run(() => capacidade.ocupar(2))).rejects.toBeInstanceOf(ConcorrenciaError);
+      await expect(uow.run(() => capacidade.ocupar(2))).rejects.toBeInstanceOf(DomainError);
       await uow.run(() => capacidade.liberar());
+      expect(await capacidade.ativos()).toBe(1);
+    });
+
+    it('vaga perdida no commit vira CAPACIDADE_ESGOTADA e desfaz a transação inteira', async () => {
+      await uow.run(() => capacidade.ocupar(1));
+      await expect(
+        uow.run(async () => {
+          uow.adicionar({ Put: { TableName: config.tabela, Item: { PK: 'X#1', SK: 'X' } } });
+          await capacidade.ocupar(1);
+        }),
+      ).rejects.toMatchObject({ code: 'CAPACIDADE_ESGOTADA' });
+      const { Item } = await doc.send(
+        new GetCommand({ TableName: config.tabela, Key: { PK: 'X#1', SK: 'X' }, ConsistentRead: true }),
+      );
+      expect(Item).toBeUndefined();
       expect(await capacidade.ativos()).toBe(1);
     });
 

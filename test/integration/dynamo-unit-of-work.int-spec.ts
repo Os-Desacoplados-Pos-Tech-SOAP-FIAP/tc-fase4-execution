@@ -52,6 +52,27 @@ describe('DynamoUnitOfWork (integração)', () => {
     expect((await ler('B')).Item).toBeUndefined();
   });
 
+  it('condição violada com erro associado lança esse erro em vez de ConcorrenciaError', async () => {
+    await uow.run(async () => put('A'));
+    const erroDeNegocio = new Error('regra violada no commit');
+    await expect(
+      uow.run(async () => {
+        put('B');
+        uow.adicionar(
+          {
+            Put: {
+              TableName: TABELA_TESTE,
+              Item: { PK: 'A', SK: 'X' },
+              ConditionExpression: 'attribute_not_exists(PK)',
+            },
+          },
+          () => erroDeNegocio,
+        );
+      }),
+    ).rejects.toBe(erroDeNegocio);
+    expect((await ler('B')).Item).toBeUndefined();
+  });
+
   it('run aninhado participa da transação externa', async () => {
     await expect(
       uow.run(async () => {
