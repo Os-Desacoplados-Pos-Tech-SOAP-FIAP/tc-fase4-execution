@@ -1,10 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsIn } from 'class-validator';
 
-import { AcaoApontamento } from '../../../application/execucao/apontar-servico/ApontarServicoUseCase';
+import {
+  ACOES_APONTAMENTO,
+  AcaoApontamento,
+} from '../../../application/execucao/apontar-servico/ApontarServicoUseCase';
 
 export class ApontamentoDto {
-  @ApiProperty({ enum: ['INICIAR', 'FINALIZAR'] })
-  @IsIn(['INICIAR', 'FINALIZAR'])
+  @ApiProperty({ enum: ACOES_APONTAMENTO })
+  @IsIn(ACOES_APONTAMENTO)
   acao!: AcaoApontamento;
 }

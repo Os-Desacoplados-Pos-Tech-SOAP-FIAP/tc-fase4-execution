@@ -61,7 +61,10 @@ export class ExecucaoController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Mecânico assume o diagnóstico' })
   @ApiResponse({ status: 200, type: OrdemExecucaoResponseDto })
+  @ApiResponse({ status: 404, description: 'OS não está na oficina' })
+  @ApiResponse({ status: 409, description: 'Conflito de concorrência (tente novamente)' })
   @ApiAuthResponses()
+  @ApiValidationResponses()
   async postIniciarDiagnostico(
     @Param('osId', uuid) osId: string,
     @CurrentUser() usuario: UsuarioAutenticado,
@@ -73,7 +76,10 @@ export class ExecucaoController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Conclui o diagnóstico (o OS Service gera o orçamento)' })
   @ApiResponse({ status: 200, type: OrdemExecucaoResponseDto })
+  @ApiResponse({ status: 404, description: 'OS não está na oficina' })
+  @ApiResponse({ status: 409, description: 'Conflito de concorrência (tente novamente)' })
   @ApiAuthResponses()
+  @ApiValidationResponses()
   async postConcluirDiagnostico(@Param('osId', uuid) osId: string): Promise<OrdemExecucaoResponseDto> {
     return OrdemExecucaoResponseDto.fromDomain(await this.concluirDiagnostico.execute(osId));
   }
@@ -82,7 +88,10 @@ export class ExecucaoController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Mecânico inicia o reparo de uma OS aceita' })
   @ApiResponse({ status: 200, type: OrdemExecucaoResponseDto })
+  @ApiResponse({ status: 404, description: 'OS não está na oficina' })
+  @ApiResponse({ status: 409, description: 'Conflito de concorrência (tente novamente)' })
   @ApiAuthResponses()
+  @ApiValidationResponses()
   async postIniciarReparo(
     @Param('osId', uuid) osId: string,
     @CurrentUser() usuario: UsuarioAutenticado,
@@ -94,6 +103,8 @@ export class ExecucaoController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Início/fim de um serviço (alimenta o tempo médio)' })
   @ApiResponse({ status: 200, type: OrdemExecucaoResponseDto })
+  @ApiResponse({ status: 404, description: 'OS não está na oficina' })
+  @ApiResponse({ status: 409, description: 'Conflito de concorrência (tente novamente)' })
   @ApiAuthResponses()
   @ApiValidationResponses()
   async postApontamento(
@@ -108,7 +119,10 @@ export class ExecucaoController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Conclui o reparo e libera a vaga na oficina' })
   @ApiResponse({ status: 200, type: OrdemExecucaoResponseDto })
+  @ApiResponse({ status: 404, description: 'OS não está na oficina' })
+  @ApiResponse({ status: 409, description: 'Conflito de concorrência (tente novamente)' })
   @ApiAuthResponses()
+  @ApiValidationResponses()
   async postConcluirReparo(@Param('osId', uuid) osId: string): Promise<OrdemExecucaoResponseDto> {
     return OrdemExecucaoResponseDto.fromDomain(await this.concluirReparo.execute(osId));
   }
@@ -116,6 +130,7 @@ export class ExecucaoController {
   @Get('metricas/tempo-medio')
   @Roles(PerfilAcesso.ADMINISTRADOR)
   @ApiOperation({ summary: 'Tempo médio de reparo (minutos)' })
+  @ApiResponse({ status: 200, schema: { type: 'object', properties: { tempoMedioMinutos: { type: 'number' } } } })
   @ApiAuthResponses()
   tempoMedio(): Promise<{ tempoMedioMinutos: number }> {
     return this.consultas.tempoMedio();

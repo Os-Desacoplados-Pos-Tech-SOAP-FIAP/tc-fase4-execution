@@ -11,7 +11,8 @@ import { ITransactionManager } from '../../ports/transaction-manager';
 import { buscarOrdem } from '../buscar-ordem';
 import { EXECUTION_EVENTS, ServicoExecutadoPayload } from '../execution-messages';
 
-export type AcaoApontamento = 'INICIAR' | 'FINALIZAR';
+export const ACOES_APONTAMENTO = ['INICIAR', 'FINALIZAR'] as const;
+export type AcaoApontamento = (typeof ACOES_APONTAMENTO)[number];
 
 @Injectable()
 export class ApontarServicoUseCase {
