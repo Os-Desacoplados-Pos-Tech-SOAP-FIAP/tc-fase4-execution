@@ -1,0 +1,11 @@
+# Dependências locais do Execution. O compose com os 4 serviços fica no tc-fase4-docs/local.
+services:
+  localstack:
+    image: localstack/localstack:3.8
+    environment:
+      SERVICES: dynamodb,sns,sqs
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - '4566:4566'
+    volumes:
+      - ./docker/localstack/init-execution.sh:/etc/localstack/init/ready.d/init-execution.sh:ro
