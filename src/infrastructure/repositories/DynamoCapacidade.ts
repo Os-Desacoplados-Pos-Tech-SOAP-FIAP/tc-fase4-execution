@@ -24,7 +24,7 @@ export class DynamoCapacidade implements ICapacidadeExecucao {
   }
 
   /** Vaga tomada por outra réplica entre a leitura e o commit é recusa de negócio, não retentativa. */
-  async ocupar(maximo: number): Promise<void> {
+  ocupar(maximo: number): Promise<void> {
     this.uow.adicionar(
       {
         Update: {
@@ -37,9 +37,10 @@ export class DynamoCapacidade implements ICapacidadeExecucao {
       },
       () => new DomainError('Capacidade de execução esgotada', 'CAPACIDADE_ESGOTADA'),
     );
+    return Promise.resolve();
   }
 
-  async liberar(): Promise<void> {
+  liberar(): Promise<void> {
     this.uow.adicionar({
       Update: {
         TableName: this.config.tabela,
@@ -49,5 +50,6 @@ export class DynamoCapacidade implements ICapacidadeExecucao {
         ExpressionAttributeValues: { ':menosUm': -1, ':zero': 0 },
       },
     });
+    return Promise.resolve();
   }
 }

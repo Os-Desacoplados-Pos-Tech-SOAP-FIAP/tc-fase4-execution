@@ -25,7 +25,7 @@ export class DynamoMetricas implements IMetricasExecucao {
     @Inject(DYNAMO_CONFIG) private readonly config: DynamoConfig,
   ) {}
 
-  async registrarServicoExecutado(servicoId: string, nome: string, minutos: number): Promise<void> {
+  registrarServicoExecutado(servicoId: string, nome: string, minutos: number): Promise<void> {
     this.uow.adicionar({
       Update: {
         TableName: this.config.tabela,
@@ -34,9 +34,10 @@ export class DynamoMetricas implements IMetricasExecucao {
         ExpressionAttributeValues: { ':nome': nome, ':minutos': minutos, ':um': 1 },
       },
     });
+    return Promise.resolve();
   }
 
-  async registrarExecucaoConcluida(minutos: number): Promise<void> {
+  registrarExecucaoConcluida(minutos: number): Promise<void> {
     this.uow.adicionar({
       Update: {
         TableName: this.config.tabela,
@@ -45,6 +46,7 @@ export class DynamoMetricas implements IMetricasExecucao {
         ExpressionAttributeValues: { ':minutos': minutos, ':um': 1 },
       },
     });
+    return Promise.resolve();
   }
 
   async tempoMedioExecucao(): Promise<number> {

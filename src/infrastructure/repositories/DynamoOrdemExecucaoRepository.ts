@@ -63,7 +63,7 @@ export class DynamoOrdemExecucaoRepository implements IOrdemExecucaoRepository {
     return ordem;
   }
 
-  async salvar(ordem: OrdemExecucao): Promise<void> {
+  salvar(ordem: OrdemExecucao): Promise<void> {
     const transicoes = ordem.pullTransicoes();
     const esperada = ordem.versao;
     const nova = ordem.avancarVersao();
@@ -99,6 +99,7 @@ export class DynamoOrdemExecucaoRepository implements IOrdemExecucaoRepository {
       }),
     );
     this.uow.registrarVersao(ordem.osId, nova);
+    return Promise.resolve();
   }
 
   async listarPorStatus(status: readonly StatusExecucao[]): Promise<OrdemExecucao[]> {

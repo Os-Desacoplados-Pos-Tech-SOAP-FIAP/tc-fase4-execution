@@ -18,11 +18,11 @@ import {
   OsPayload,
 } from '../execution-messages';
 
-const JA_ACEITA: readonly StatusExecucao[] = [
+const JA_ACEITA: ReadonlySet<StatusExecucao> = new Set([
   StatusExecucao.AGUARDANDO_REPARO,
   StatusExecucao.EM_REPARO,
   StatusExecucao.CONCLUIDA,
-];
+]);
 
 function ehMotivoDeRecusa(erro: unknown): erro is DomainError {
   return erro instanceof DomainError && (MOTIVOS_RECUSA as readonly string[]).includes(erro.code);
@@ -72,7 +72,7 @@ export class EnfileirarExecucaoUseCase {
         'ORDEM_NAO_ENCONTRADA',
       );
     }
-    if (!JA_ACEITA.includes(ordem.status)) {
+    if (!JA_ACEITA.has(ordem.status)) {
       if (ordem.status !== StatusExecucao.DIAGNOSTICO_CONCLUIDO) {
         throw new DomainError(
           `Ordem da OS ${input.correlationId} está em ${ordem.status}`,
@@ -106,7 +106,7 @@ export class EnfileirarExecucaoUseCase {
 
     const ordem = await this.ordens.buscarPorOs(input.correlationId);
     // Outra entrega aceitou a OS entre as duas transações: depois do pivô não há recusa.
-    if (ordem && JA_ACEITA.includes(ordem.status)) {
+    if (ordem && JA_ACEITA.has(ordem.status)) {
       await this.publicarAceite(input);
       return;
     }

@@ -23,7 +23,7 @@ export class DynamoOutbox implements IOutbox {
     @Inject(MESSAGING_CONFIG) private readonly mensageria: MessagingConfig,
   ) {}
 
-  async publicar(envelope: MessageEnvelope, destino?: string): Promise<void> {
+  publicar(envelope: MessageEnvelope, destino?: string): Promise<void> {
     const grupo = envelope.correlationId;
     this.uow.adicionar({
       Put: {
@@ -40,6 +40,7 @@ export class DynamoOutbox implements IOutbox {
         },
       },
     });
+    return Promise.resolve();
   }
 }
 
