@@ -18,7 +18,7 @@ export default tseslint.config(
       },
     },
     rules: {
-      // Projeto usa `any` pontualmente (mocks/Prisma); não bloquear o build por isso.
+      // Projeto usa `any` pontualmente (mocks de teste); não bloquear o build por isso.
       '@typescript-eslint/no-explicit-any': 'off',
       // Variáveis não usadas são warning (prefixo _ para ignorar intencionais).
       '@typescript-eslint/no-unused-vars': [
