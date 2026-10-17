@@ -1,4 +1,4 @@
-# Dependências locais do Execution. O compose com os 4 serviços fica no tc-fase4-docs/local.
+# Dependências locais do Execution. O compose com os 4 serviços fica no tc-fase4-os/local.
 services:
   localstack:
     image: localstack/localstack:3.8
