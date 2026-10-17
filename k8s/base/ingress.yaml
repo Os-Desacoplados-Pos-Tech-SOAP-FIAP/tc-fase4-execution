@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: execution
+  labels:
+    app.kubernetes.io/name: execution
+    app.kubernetes.io/part-of: oficina-fase4
+  annotations:
+    # Entra no ALB interno compartilhado (IngressGroup oficina-fase4), exposto só ao
+    # API Gateway (VPC Link) e à Lambda. O SG do ALB é gerenciado pelo tc-fase4-infra;
+    # ${ALB_SG_ID} é preenchido pelo CD (envsubst) com o output alb_security_group_id.
+    alb.ingress.kubernetes.io/group.name: oficina-fase4
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/security-groups: ${ALB_SG_ID}
+    alb.ingress.kubernetes.io/manage-backend-security-group-rules: "true"
+    alb.ingress.kubernetes.io/healthcheck-path: /api/execution/health
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /api/execution
+            pathType: Prefix
+            backend:
+              service:
+                name: execution
+                port:
+                  number: 80

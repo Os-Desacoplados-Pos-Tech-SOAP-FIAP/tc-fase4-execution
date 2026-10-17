@@ -1,0 +1,120 @@
+name: Terraform
+
+# Esteira do Terraform do serviço (DynamoDB, filas, tópico, IRSA):
+#   terraform -> PR e push na main que mexem em terraform/: fmt + init sem backend +
+#                validate. Sem plan: depende do state da infra, que só existe com a
+#                infra no ar. Nome diferente de `ci` (o `ci` do ruleset é o de testes).
+#   deploy    -> SÓ por workflow_dispatch (plan | apply | destroy), com aprovação no
+#                environment `aws-infra`. Subir recurso pago é sempre decisão explícita.
+on:
+  pull_request:
+    branches: [main]
+    paths: ['terraform/**', '.github/workflows/terraform.yml']
+  push:
+    branches: [main]
+    paths: ['terraform/**', '.github/workflows/terraform.yml']
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Ação do Terraform'
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+
+permissions:
+  id-token: write # OIDC: o job troca este token por credenciais AWS temporárias
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ROLE_ARN: arn:aws:iam::538880133939:role/gha-tc-fase4-execution
+  CLUSTER_NAME: oficina-fase4
+  NAMESPACE: execution
+
+jobs:
+  terraform:
+    name: terraform
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash # -eo pipefail: falha do terraform não some atrás do tee
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init (sem backend)
+        run: terraform init -backend=false -input=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+  deploy:
+    name: deploy
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Gate de custo: o job fica em "Review deployments" até um revisor aprovar.
+    environment: aws-infra
+    defaults:
+      run:
+        shell: bash # -eo pipefail: falha do terraform não some atrás do tee
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Credenciais AWS via OIDC (sem secrets)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        if: inputs.action == 'plan'
+        run: |
+          terraform plan -no-color -input=false | tee plan.txt
+          {
+            echo '## Terraform plan'
+            echo '```'
+            tail -n 80 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform apply
+        if: inputs.action == 'apply'
+        run: terraform apply -auto-approve -input=false
+
+      - name: Remove o namespace do serviço antes do destroy
+        if: inputs.action == 'destroy'
+        # Sem os pods, ninguém usa a tabela e as filas que vão sumir; sem o Ingress, o
+        # AWS Load Balancer Controller tira a regra /api/execution do ALB compartilhado.
+        # Com o cluster fora do ar não há o que remover.
+        run: |
+          STATUS=$(aws eks describe-cluster --name "$CLUSTER_NAME" --query cluster.status --output text 2>/dev/null || echo AUSENTE)
+          if [ "$STATUS" != "ACTIVE" ]; then
+            echo "Cluster $CLUSTER_NAME indisponivel ($STATUS): nada a remover no Kubernetes."
+            exit 0
+          fi
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=true --timeout=300s
+
+      - name: Terraform destroy
+        if: inputs.action == 'destroy'
+        run: terraform destroy -auto-approve -input=false

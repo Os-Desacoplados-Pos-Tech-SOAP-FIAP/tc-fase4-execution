@@ -1,0 +1,202 @@
+name: CD
+
+# Entrega contínua no EKS: depois do CI verde na main, publica a imagem no ECR (tag =
+# SHA) e aplica os manifests de k8s/base no namespace execution. ConfigMap e Secret são
+# montados aqui, a partir dos outputs do Terraform do serviço e do Secrets Manager.
+#
+# A infra sobe e desce por ensaio. Sem cluster ACTIVE ou sem o Terraform do serviço
+# aplicado, o deploy é pulado com aviso e a esteira termina verde.
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: cd-execution
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ROLE_ARN: arn:aws:iam::538880133939:role/gha-tc-fase4-execution
+  CLUSTER: oficina-fase4
+  NAMESPACE: execution
+  APP: execution
+  OTEL_RECEIVER_HOST: grafana-k8s-monitoring-alloy-receiver.observability.svc.cluster.local
+
+jobs:
+  deploy:
+    name: deploy
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash # -eo pipefail: falha do kubectl/aws não some atrás de um pipe
+    steps:
+      - name: Resolve o commit a implantar
+        id: commit
+        # Em workflow_run, GITHUB_SHA é o head da main no momento do gatilho, que pode
+        # não ser o commit que passou no CI. O mesmo SHA vale para checkout e tag.
+        run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout (commit que passou no CI)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.commit.outputs.sha }}
+
+      - name: Credenciais AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cluster disponível?
+        id: cluster
+        run: |
+          STATUS=$(aws eks describe-cluster --name "$CLUSTER" --query cluster.status --output text 2>/dev/null || echo AUSENTE)
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" != "ACTIVE" ]; then
+            echo "::notice::Cluster $CLUSTER indisponivel ($STATUS) - infra derrubada? Deploy pulado."
+          fi
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.cluster.outputs.status == 'ACTIVE'
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform do serviço aplicado?
+        id: state
+        if: steps.cluster.outputs.status == 'ACTIVE'
+        # Lê só o state do próprio serviço (os valores da infra que o CD usa são
+        # repassados como outputs). Sem outputs, o Terraform do execution não foi aplicado.
+        run: |
+          terraform -chdir=terraform init -input=false >/dev/null
+          if ! terraform -chdir=terraform output -raw inbox_queue_url >/dev/null 2>&1; then
+            echo "::notice::State do execution sem outputs - aplique o Terraform do servico antes (Actions > Terraform > Run workflow > apply). Deploy pulado."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          out() { terraform -chdir=terraform output -raw "$1"; }
+          {
+            echo "ECR_URL=$(out ecr_repository_url)"
+            echo "INBOX_QUEUE_URL=$(out inbox_queue_url)"
+            echo "EVENTS_TOPIC_ARN=$(out events_topic_arn)"
+            echo "IRSA_ROLE_ARN=$(out irsa_role_arn)"
+            echo "ALB_SG_ID=$(out alb_security_group_id)"
+            echo "DYNAMO_TABLE=$(out dynamo_table_name)"
+            echo "JWT_SECRET_NAME=$(out jwt_secret_name)"
+          } >> "$GITHUB_ENV"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Login no ECR
+        if: steps.state.outputs.ready == 'true'
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin "${ECR_URL%%/*}"
+
+      - name: Build e push da imagem (tag = SHA)
+        if: steps.state.outputs.ready == 'true'
+        env:
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          # ECR com tags imutáveis: se a tag já existe, reaproveita (re-deploy idempotente).
+          if aws ecr describe-images --repository-name "${ECR_URL#*/}" --image-ids imageTag="$SHA" >/dev/null 2>&1; then
+            echo "Imagem $SHA ja publicada no ECR - reaproveitando."
+          else
+            docker build -f docker/Dockerfile -t "$ECR_URL:$SHA" .
+            docker push "$ECR_URL:$SHA"
+          fi
+
+      - name: Kubeconfig
+        if: steps.state.outputs.ready == 'true'
+        run: aws eks update-kubeconfig --name "$CLUSTER" --region "$AWS_REGION"
+
+      - name: Namespace, Secret e ConfigMap
+        if: steps.state.outputs.ready == 'true'
+        run: |
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+          # Sem banco relacional: o único segredo do Execution é o JWT compartilhado.
+          JWT_SECRET=$(aws secretsmanager get-secret-value --secret-id "$JWT_SECRET_NAME" --query SecretString --output text)
+          echo "::add-mask::$JWT_SECRET"
+          kubectl create secret generic "$APP-secret" -n "$NAMESPACE" \
+            --from-literal=JWT_SECRET="$JWT_SECRET" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          CONFIG=(
+            --from-literal=NODE_ENV=production
+            --from-literal=PORT=3000
+            --from-literal=AWS_REGION="$AWS_REGION"
+            --from-literal=MESSAGING_ENABLED=true
+            --from-literal=OTEL_SERVICE_NAME="tc-fase4-$APP"
+            --from-literal=DYNAMO_TABLE="$DYNAMO_TABLE"
+            --from-literal=EXECUTION_MAX_CONCURRENT=3
+            --from-literal=INBOX_QUEUE_URL="$INBOX_QUEUE_URL"
+            --from-literal=EVENTS_TOPIC_ARN="$EVENTS_TOPIC_ARN"
+          )
+          # Telemetria só se o Alloy estiver instalado (opcional na infra); sem ele a
+          # variável fica de fora e a app roda sem exportar.
+          if kubectl get service -n observability "${OTEL_RECEIVER_HOST%%.*}" >/dev/null 2>&1; then
+            CONFIG+=(--from-literal=OTEL_EXPORTER_OTLP_ENDPOINT="http://$OTEL_RECEIVER_HOST:4318")
+          else
+            echo "::notice::Alloy nao instalado - $APP sobe sem telemetria OTLP."
+          fi
+          kubectl create configmap "$APP-config" -n "$NAMESPACE" "${CONFIG[@]}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy (Kustomize)
+        if: steps.state.outputs.ready == 'true'
+        env:
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          # O kubectl do runner não tem `kustomize edit`: troca a imagem direto no
+          # kustomization (newName/newTag) e confere que a troca aconteceu.
+          sed -i "s|newName: $APP\$|newName: $ECR_URL|; s|newTag: latest\$|newTag: $SHA|" k8s/base/kustomization.yaml
+          grep -q "newName: $ECR_URL" k8s/base/kustomization.yaml
+          grep -q "newTag: $SHA" k8s/base/kustomization.yaml
+
+          # Só as duas variáveis do contrato; qualquer outro ${...} faria o apply falhar.
+          # Aspas simples de propósito: envsubst e grep recebem ${...} literal.
+          # shellcheck disable=SC2016
+          kubectl kustomize k8s/base | envsubst '${IRSA_ROLE_ARN} ${ALB_SG_ID}' > manifests.yaml
+          # shellcheck disable=SC2016
+          if grep -n '\${' manifests.yaml; then
+            echo "::error::Variavel nao substituida nos manifests."
+            exit 1
+          fi
+
+          kubectl apply -f manifests.yaml | tee apply.txt
+          # Mesmo SHA (re-run ou workflow_dispatch): o Deployment não muda e os pods
+          # continuariam com o Secret/ConfigMap antigos (ex.: JWT_SECRET rotacionado).
+          if grep -q "deployment.apps/$APP unchanged" apply.txt; then
+            kubectl rollout restart "deployment/$APP" -n "$NAMESPACE"
+          fi
+
+      - name: Rollout
+        id: rollout
+        if: steps.state.outputs.ready == 'true'
+        run: kubectl rollout status "deployment/$APP" -n "$NAMESPACE" --timeout=300s
+
+      - name: Smoke interno /api/execution/health
+        if: steps.state.outputs.ready == 'true'
+        run: |
+          kubectl exec -n "$NAMESPACE" "deploy/$APP" -c "$APP" -- \
+            wget -qO- "http://localhost:3000/api/$APP/health" | grep '"status":"ok"'
+
+      - name: Estado final
+        if: steps.state.outputs.ready == 'true'
+        run: kubectl get deployment,svc,ingress,pods -n "$NAMESPACE"
+
+      - name: Diagnóstico (somente em falha)
+        if: failure() && steps.state.outputs.ready == 'true'
+        run: |
+          kubectl get all -n "$NAMESPACE" || true
+          kubectl describe pods -n "$NAMESPACE" || true
+          kubectl logs -n "$NAMESPACE" -l "app.kubernetes.io/name=$APP" --all-containers --tail=200 || true
+
+      - name: Rollback se o rollout falhar
+        if: failure() && steps.rollout.outcome == 'failure'
+        run: kubectl rollout undo "deployment/$APP" -n "$NAMESPACE" || true
