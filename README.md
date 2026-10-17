@@ -138,7 +138,7 @@ docker compose up -d     # LocalStack (DynamoDB + SNS/SQS FIFO); a topologia é 
 npm run start:dev        # http://localhost:3003/api/execution/docs
 ```
 
-O `docker-compose.yml` sobe só as dependências do Execution; o compose com os quatro serviços fica em `tc-fase4-docs/local`.
+O `docker-compose.yml` sobe só as dependências do Execution; o compose com os quatro serviços fica em `tc-fase4-os/local`.
 O script `docker/localstack/init-execution.sh` cria a tabela, a fila de entrada com DLQ, o tópico de eventos e uma fila
 `oficina-execution-events-spy.fifo` assinando o tópico, útil para observar os eventos publicados.
 
