@@ -170,6 +170,16 @@ A validação roda no boot e falha com a lista de variáveis ausentes.
 | `npm run test:cov` | Todos os projetos com cobertura; limite global mínimo de 80% nas quatro métricas |
 
 Os testes de integração e e2e precisam do LocalStack no ar (`npm run docker:up`).
+
+`test/setup-env.ts` e `test/global-setup.ts` apontam por padrão para o LocalStack em `http://localhost:4566` e, antes
+da suíte, recriam do zero a tabela `oficina-execution-test` (a tabela de dev `oficina-execution` não é tocada).
+O endpoint é lido de `AWS_ENDPOINT_URL`, só preenchida com o padrão quando não está definida
+(`AWS_ENDPOINT_URL=http://localhost:4567 npm run test:int`, por exemplo, usa outro LocalStack).
+
+Se o compose integrado de `tc-fase4-os/local` estiver no ar, o LocalStack dele já ocupa a porta 4566: o teste
+reaproveita esse LocalStack (cria a própria tabela nele) e o `docker compose up localstack` deste repositório falha
+por conflito de porta. Nesse caso, não suba o LocalStack daqui: rode os testes direto contra o do compose integrado
+ou derrube-o antes (`docker compose down` em `tc-fase4-os/local`) e então rode `npm run docker:up`.
 Qualidade: `npm run lint:ci` (sem warnings) e `npm run build`.
 
 ## CI/CD
