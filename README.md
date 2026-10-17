@@ -177,4 +177,60 @@ Qualidade: `npm run lint:ci` (sem warnings) e `npm run build`.
 `.github/workflows/ci.yml` (job `ci`): LocalStack como serviço com a topologia criada pelo `init-execution.sh` →
 lint → build → testes com cobertura → build da imagem Docker → análise SonarCloud.
 `ci` e `SonarCloud Code Analysis` (quality gate) são checks obrigatórios para merge na `main`.
-Deploy no EKS (CD) e Terraform do serviço entram na Etapa 8.
+
+| Workflow | Gatilho | O que faz |
+|---|---|---|
+| `ci.yml` (job `ci`) | PR e push na `main` | lint, build, testes, imagem, Sonar |
+| `terraform.yml` (job `terraform`) | PR/push que mexe em `terraform/` | `fmt -check`, `init -backend=false`, `validate` |
+| `terraform.yml` (job `deploy`) | só **Run workflow** (`plan`/`apply`/`destroy`), com aprovação no environment `aws-infra` | aplica ou destrói os recursos do serviço |
+| `cd.yml` | CI verde na `main` ou **Run workflow** | imagem no ECR e deploy no EKS |
+
+## Deploy no EKS
+
+### O que o Terraform do serviço cria (`terraform/`)
+
+State em `s3://tc-fase4-tfstate-538880133939/execution/terraform.tfstate`; lê a infra
+compartilhada de `infra/terraform.tfstate` (`tc-fase4-infra`).
+
+| Recurso | Nome |
+|---|---|
+| Tabela DynamoDB (sob demanda, PK/SK, GSI1, TTL em `expiraEm`) | `oficina-execution` |
+| Fila FIFO de entrada + DLQ (redrive após 3 recebimentos) | `oficina-execution-inbox.fifo`, `oficina-execution-inbox-dlq.fifo` |
+| Tópico FIFO de eventos | `oficina-execution-events.fifo` |
+| Role IRSA do pod (consome a inbox, publica no tópico, lê e grava na tabela) | `oficina-fase4-execution` |
+
+A tabela é a mesma do LocalStack (`tc-fase4-os/local/localstack/init.sh`). A role libera só
+as operações que o código usa: `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem` e `Query`
+(na tabela e no GSI1); o `TransactWriteItems` é autorizado item a item por essas ações.
+Configuração de estudo: sem PITR e sem proteção contra exclusão. A assinatura do tópico é
+feita pelo OS, que é quem consome os eventos.
+
+### Ordem
+
+`tc-fase4-infra` → catalog → **execution** → billing → os → auth → gateway. Para derrubar,
+a ordem inversa (o OS assina o tópico do execution e tem permissão na fila dele).
+
+### Rodar o Terraform
+
+Actions → **Terraform** → **Run workflow** → escolha `plan`, `apply` ou `destroy` → aprove
+em **Review deployments**. O `destroy` remove antes o namespace `execution` do cluster (pods
+e Ingress), se o cluster estiver no ar.
+
+### O que o CD faz
+
+1. Usa o SHA que passou no CI; pula com aviso se o cluster `oficina-fase4` não está
+   `ACTIVE` ou se o Terraform do execution não foi aplicado (state sem outputs).
+2. Publica a imagem no ECR com tag = SHA (reaproveita se a tag já existe).
+3. Cria o Secret `execution-secret` (só `JWT_SECRET`, lido do Secrets Manager) e o ConfigMap
+   `execution-config` (`DYNAMO_TABLE`, `EXECUTION_MAX_CONCURRENT=3`, `INBOX_QUEUE_URL`,
+   `EVENTS_TOPIC_ARN`, fixas e, se o Alloy estiver instalado, `OTEL_EXPORTER_OTLP_ENDPOINT`).
+4. Aplica `k8s/base` com a imagem do ECR, a role IRSA e o SG do ALB. Sem initContainer e
+   sem seed: a tabela já nasce pronta no Terraform. O serviço entra no ALB interno em
+   `/api/execution`.
+5. Espera o rollout e faz um smoke em `/api/execution/health` de dentro do pod.
+
+### Rollback
+
+Automático quando o rollout falha (`kubectl rollout undo`), com `describe` e logs no job.
+Manual: `kubectl rollout undo deployment/execution -n execution`, ou um `git revert` na `main`
+(o CD implanta o commit revertido).
