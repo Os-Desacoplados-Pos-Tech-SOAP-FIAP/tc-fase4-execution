@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: execution
+  labels:
+    app.kubernetes.io/name: execution
+    app.kubernetes.io/part-of: oficina-fase4
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: execution
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: execution
+        app.kubernetes.io/part-of: oficina-fase4
+    spec:
+      serviceAccountName: execution
+      # Sem initContainer: o Execution usa DynamoDB (tabela criada pelo Terraform), sem
+      # migrations.
+      containers:
+        - name: execution
+          image: execution
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: execution-config
+            - secretRef:
+                name: execution-secret
+          # Endpoint público, sem auth e sem banco.
+          readinessProbe:
+            httpGet:
+              path: /api/execution/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/execution/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

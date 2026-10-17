@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: execution
+  labels:
+    app.kubernetes.io/name: execution
+    app.kubernetes.io/part-of: oficina-fase4
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: execution
+  ports:
+    - name: http
+      port: 80
+      targetPort: http # containerPort 3000
+      protocol: TCP
