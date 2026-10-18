@@ -7,6 +7,8 @@ export interface MessagingConfig {
   endpoint?: string;
   inboxQueueUrl: string;
   eventsTopicArn: string;
+  /** DLQ da fila de entrada, só para a métrica dlq_mensagens (opcional). */
+  dlqQueueUrl?: string;
 }
 
 export function lerMessagingConfig(env: NodeJS.ProcessEnv): MessagingConfig {
@@ -16,5 +18,6 @@ export function lerMessagingConfig(env: NodeJS.ProcessEnv): MessagingConfig {
     endpoint: env.AWS_ENDPOINT_URL || undefined,
     inboxQueueUrl: env.INBOX_QUEUE_URL ?? '',
     eventsTopicArn: env.EVENTS_TOPIC_ARN ?? '',
+    dlqQueueUrl: env.DLQ_QUEUE_URL || undefined,
   };
 }

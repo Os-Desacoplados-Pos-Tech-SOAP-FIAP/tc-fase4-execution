@@ -15,12 +15,15 @@ import { performance } from 'node:perf_hooks';
 
 import { MessageEnvelope } from '../../application/ports/message-envelope';
 import { processarNoContexto } from '../telemetry/contexto-mensagem';
+import { MetricasMensageria } from '../telemetry/metricas-mensageria';
 import { erroParaLog } from './erro-para-log';
 import { lerEnvelope } from './message-envelope.parser';
 import { MessageHandlerRegistry } from './message-handler.registry';
 import { MESSAGING_CONFIG, MessagingConfig } from './messaging.config';
 
 const PAUSA_APOS_ERRO_MS = 1000;
+/** Rótulo da métrica quando o envelope não pôde ser lido. */
+const TIPO_ILEGIVEL = 'desconhecido';
 
 /**
  * Long-polling na fila FIFO de entrada. Mensagem processada é apagada; com falha,
@@ -39,6 +42,7 @@ export class SqsInboxConsumer implements OnApplicationBootstrap, BeforeApplicati
     private readonly sqs: SQSClient,
     @Inject(MESSAGING_CONFIG) private readonly config: MessagingConfig,
     private readonly registry: MessageHandlerRegistry,
+    private readonly metricas: MetricasMensageria,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -107,6 +111,7 @@ export class SqsInboxConsumer implements OnApplicationBootstrap, BeforeApplicati
       messageId: envelope?.messageId,
       osId: envelope?.correlationId ?? mensagem.Attributes?.MessageGroupId,
     };
+    const tipo = envelope?.type ?? TIPO_ILEGIVEL;
 
     try {
       await processarNoContexto(mensagem.MessageAttributes, info, async () => {
@@ -135,8 +140,10 @@ export class SqsInboxConsumer implements OnApplicationBootstrap, BeforeApplicati
           duracaoMs: Math.round(performance.now() - inicio),
         });
       });
+      this.metricas.mensagemProcessada(tipo, 'ok');
       return true;
     } catch {
+      this.metricas.mensagemProcessada(tipo, 'erro');
       return false;
     }
   }

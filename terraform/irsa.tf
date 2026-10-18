@@ -31,8 +31,8 @@ resource "aws_iam_role" "app" {
   assume_role_policy = data.aws_iam_policy_document.trust.json
 }
 
-# Menor privilégio: consome a própria fila, publica no próprio tópico e usa a própria
-# tabela. Nada mais.
+# Menor privilégio: consome a própria fila, lê a profundidade da própria DLQ, publica no
+# próprio tópico e usa a própria tabela. Nada mais.
 data "aws_iam_policy_document" "app" {
   statement {
     actions = [
@@ -42,6 +42,12 @@ data "aws_iam_policy_document" "app" {
       "sqs:GetQueueAttributes",
     ]
     resources = [aws_sqs_queue.inbox.arn]
+  }
+
+  # Só leitura da profundidade da DLQ, para a métrica dlq_mensagens.
+  statement {
+    actions   = ["sqs:GetQueueAttributes"]
+    resources = [aws_sqs_queue.dlq.arn]
   }
 
   statement {

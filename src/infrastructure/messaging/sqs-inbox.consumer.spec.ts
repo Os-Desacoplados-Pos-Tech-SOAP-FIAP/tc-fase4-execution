@@ -6,6 +6,7 @@ import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
 import { mockClient } from 'aws-sdk-client-mock';
 
+import { MetricasMensageria } from '../telemetry/metricas-mensageria';
 import { MessageHandlerRegistry } from './message-handler.registry';
 import { lerMessagingConfig } from './messaging.config';
 import { SqsInboxConsumer } from './sqs-inbox.consumer';
@@ -18,9 +19,13 @@ describe('SqsInboxConsumer', () => {
   let registry: MessageHandlerRegistry;
   let handler: jest.Mock;
   let consumer: SqsInboxConsumer;
+  let metricas: MetricasMensageria;
+  let contar: jest.SpyInstance;
 
   beforeEach(() => {
     sqs.reset();
+    metricas = new MetricasMensageria();
+    contar = jest.spyOn(metricas, 'mensagemProcessada');
     registry = new MessageHandlerRegistry();
     handler = jest.fn().mockResolvedValue(undefined);
     registry.registrar('x.v1', handler);
@@ -28,6 +33,7 @@ describe('SqsInboxConsumer', () => {
       new SQSClient({}),
       lerMessagingConfig({ INBOX_QUEUE_URL: 'url-fila' }),
       registry,
+      metricas,
     );
   });
 
@@ -81,6 +87,21 @@ describe('SqsInboxConsumer', () => {
     expect(handler.mock.calls.map((c) => c[0].messageId)).toEqual(['m1', 'm3']);
     expect(sqs.commandCalls(DeleteMessageCommand).map((c) => c.args[0].input.ReceiptHandle)).toEqual([
       'rh-3',
+    ]);
+  });
+
+  it('conta mensagens processadas por tipo e resultado', async () => {
+    handler.mockRejectedValueOnce(new Error('boom'));
+    receber(
+      { id: '1', corpo: corpo('m1', 'os-1'), grupo: 'os-1' },
+      { id: '2', corpo: corpo('m2', 'os-2'), grupo: 'os-2' },
+      { id: '3', corpo: '{lixo', grupo: 'os-3' },
+    );
+    await consumer.consumirLote();
+    expect(contar.mock.calls).toEqual([
+      ['x.v1', 'erro'],
+      ['x.v1', 'ok'],
+      ['desconhecido', 'erro'],
     ]);
   });
 
@@ -142,6 +163,7 @@ describe('SqsInboxConsumer', () => {
       new SQSClient({}),
       lerMessagingConfig({ MESSAGING_ENABLED: 'false' }),
       registry,
+      metricas,
     );
     desligado.onApplicationBootstrap();
     expect(sqs.commandCalls(ReceiveMessageCommand)).toHaveLength(0);
@@ -202,6 +224,7 @@ describe('SqsInboxConsumer', () => {
       new SQSClient({}),
       lerMessagingConfig({ MESSAGING_ENABLED: 'false' }),
       registry,
+      metricas,
     );
     desligado.onApplicationBootstrap();
     await expect(desligado.beforeApplicationShutdown()).resolves.toBeUndefined();
@@ -231,6 +254,7 @@ describe('SqsInboxConsumer', () => {
         { send } as unknown as SQSClient,
         lerMessagingConfig({ INBOX_QUEUE_URL: 'url-fila' }),
         registry,
+        metricas,
       );
     });
     afterEach(() => {

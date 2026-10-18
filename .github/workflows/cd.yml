@@ -86,6 +86,7 @@ jobs:
             echo "ECR_URL=$(out ecr_repository_url)"
             echo "INBOX_QUEUE_URL=$(out inbox_queue_url)"
             echo "EVENTS_TOPIC_ARN=$(out events_topic_arn)"
+            echo "DLQ_QUEUE_URL=$(out dlq_url)"
             echo "IRSA_ROLE_ARN=$(out irsa_role_arn)"
             echo "ALB_SG_ID=$(out alb_security_group_id)"
             echo "DYNAMO_TABLE=$(out dynamo_table_name)"
@@ -136,6 +137,7 @@ jobs:
             --from-literal=EXECUTION_MAX_CONCURRENT=3
             --from-literal=INBOX_QUEUE_URL="$INBOX_QUEUE_URL"
             --from-literal=EVENTS_TOPIC_ARN="$EVENTS_TOPIC_ARN"
+            --from-literal=DLQ_QUEUE_URL="$DLQ_QUEUE_URL"
           )
           # Telemetria só se o Alloy estiver instalado (opcional na infra); sem ele a
           # variável fica de fora e a app roda sem exportar.
