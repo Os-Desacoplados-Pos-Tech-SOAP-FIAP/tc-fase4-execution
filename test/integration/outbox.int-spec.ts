@@ -1,4 +1,8 @@
-import { DeleteCommand, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { context, propagation, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import { W3CTraceContextPropagator } from '@opentelemetry/core';
+import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
 
 import { criarEnvelope, MessageEnvelope } from '../../src/application/ports/message-envelope';
 import { chaves } from '../../src/infrastructure/dynamo/chaves';
@@ -139,6 +143,41 @@ describe('Outbox DynamoDB (integração)', () => {
     enviar.mockImplementationOnce(async () => apagarPendentes());
     expect(await publicador().publicarPendentes()).toBe(1);
     expect(await pendentes()).toHaveLength(0);
+  });
+
+  describe('trace', () => {
+    const TRACE_ID = '0af7651916cd43dd8448eb211c80319c';
+
+    beforeAll(() => {
+      context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+      propagation.setGlobalPropagator(new W3CTraceContextPropagator());
+      trace.setGlobalTracerProvider(new BasicTracerProvider());
+    });
+    afterAll(() => {
+      trace.disable();
+      propagation.disable();
+      context.disable();
+    });
+
+    it('envia dentro de um span no trace de quem gravou a mensagem', async () => {
+      await gravar('os-1', 1, 't.a');
+      const [{ PK, SK }] = await pendentes();
+      await doc.send(
+        new UpdateCommand({
+          TableName: TABELA_TESTE,
+          Key: { PK, SK },
+          UpdateExpression: 'SET traceparent = :tp',
+          ExpressionAttributeValues: { ':tp': `00-${TRACE_ID}-b7ad6b7169203331-01` },
+        }),
+      );
+      let traceIdNoEnvio: string | undefined;
+      enviar.mockImplementationOnce(async () => {
+        traceIdNoEnvio = trace.getActiveSpan()?.spanContext().traceId;
+      });
+
+      expect(await publicador().publicarPendentes()).toBe(1);
+      expect(traceIdNoEnvio).toBe(TRACE_ID);
+    });
   });
 
   describe('lease', () => {

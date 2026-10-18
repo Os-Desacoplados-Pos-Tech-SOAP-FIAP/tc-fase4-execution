@@ -11,8 +11,10 @@ import {
   Logger,
   OnApplicationBootstrap,
 } from '@nestjs/common';
+import { performance } from 'node:perf_hooks';
 
 import { MessageEnvelope } from '../../application/ports/message-envelope';
+import { processarNoContexto } from '../telemetry/contexto-mensagem';
 import { erroParaLog } from './erro-para-log';
 import { lerEnvelope } from './message-envelope.parser';
 import { MessageHandlerRegistry } from './message-handler.registry';
@@ -87,27 +89,54 @@ export class SqsInboxConsumer implements OnApplicationBootstrap, BeforeApplicati
     }
   }
 
+  /**
+   * O envelope é lido antes de abrir o span, para identificar a mensagem nele; se a leitura
+   * falhar, o erro é relançado dentro do span e segue o caminho de falha de sempre.
+   */
   private async processar(mensagem: Message): Promise<boolean> {
+    const inicio = performance.now();
     let envelope: MessageEnvelope | undefined;
+    let erroLeitura: unknown;
     try {
       envelope = lerEnvelope(mensagem.Body);
-      await this.registry.despachar(envelope);
-      await this.sqs.send(
-        new DeleteMessageCommand({
-          QueueUrl: this.config.inboxQueueUrl,
-          ReceiptHandle: mensagem.ReceiptHandle,
-        }),
-      );
-      return true;
     } catch (erro) {
-      this.logger.error({
-        msg: 'Falha ao processar mensagem',
-        messageId: envelope?.messageId,
-        type: envelope?.type,
-        osId: envelope?.correlationId ?? mensagem.Attributes?.MessageGroupId,
-        sqsMessageId: mensagem.MessageId,
-        err: erroParaLog(erro),
+      erroLeitura = erro;
+    }
+    const info = {
+      type: envelope?.type,
+      messageId: envelope?.messageId,
+      osId: envelope?.correlationId ?? mensagem.Attributes?.MessageGroupId,
+    };
+
+    try {
+      await processarNoContexto(mensagem.MessageAttributes, info, async () => {
+        try {
+          if (!envelope) throw erroLeitura;
+          await this.registry.despachar(envelope);
+          await this.sqs.send(
+            new DeleteMessageCommand({
+              QueueUrl: this.config.inboxQueueUrl,
+              ReceiptHandle: mensagem.ReceiptHandle,
+            }),
+          );
+        } catch (erro) {
+          // Dentro do span: o log sai com o trace_id da mensagem.
+          this.logger.error({
+            msg: 'Falha ao processar mensagem',
+            ...info,
+            sqsMessageId: mensagem.MessageId,
+            err: erroParaLog(erro),
+          });
+          throw erro;
+        }
+        this.logger.log({
+          msg: 'Mensagem processada',
+          ...info,
+          duracaoMs: Math.round(performance.now() - inicio),
+        });
       });
+      return true;
+    } catch {
       return false;
     }
   }

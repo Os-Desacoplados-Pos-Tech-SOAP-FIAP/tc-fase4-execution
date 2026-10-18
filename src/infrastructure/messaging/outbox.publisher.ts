@@ -12,6 +12,7 @@ import {
 
 import { MessageEnvelope } from '../../application/ports/message-envelope';
 import { DYNAMO_CONFIG, DynamoConfig } from '../dynamo/dynamo.config';
+import { publicarNoContexto } from '../telemetry/contexto-mensagem';
 import { erroParaLog } from './erro-para-log';
 import { MESSAGING_CONFIG, MessagingConfig } from './messaging.config';
 import { DURACAO_LEASE_MS, OutboxLease } from './outbox-lease';
@@ -145,7 +146,11 @@ export class OutboxPublisher implements OnApplicationBootstrap, BeforeApplicatio
 
   private async enviar(item: ItemOutbox): Promise<boolean> {
     try {
-      await this.transporte.enviar(item.destination, item.body, item.traceparent ?? null);
+      await publicarNoContexto(
+        item.traceparent ?? null,
+        { type: item.type, messageId: item.body.messageId, osId: item.groupId },
+        () => this.transporte.enviar(item.destination, item.body, item.traceparent ?? null),
+      );
     } catch (erro) {
       this.logger.error({
         msg: 'Falha ao publicar mensagem da outbox',
