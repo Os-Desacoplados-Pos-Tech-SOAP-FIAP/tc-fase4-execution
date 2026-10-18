@@ -8,6 +8,8 @@ import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 
+import { intervaloExportacaoMetricas } from './infrastructure/telemetry/intervalo-exportacao';
+
 // Sem OTEL_EXPORTER_OTLP_ENDPOINT (dev local e testes) o SDK nem inicia — a app
 // roda normalmente, apenas sem telemetria. Em produção o endpoint aponta para o
 // Grafana Alloy no cluster, que encaminha para o Grafana Cloud.
@@ -19,7 +21,10 @@ if (endpoint) {
       [ATTR_SERVICE_NAME]: process.env.OTEL_SERVICE_NAME ?? 'tc-fase4-execution',
     }),
     traceExporter: new OTLPTraceExporter(),
-    metricReader: new PeriodicExportingMetricReader({ exporter: new OTLPMetricExporter() }),
+    metricReader: new PeriodicExportingMetricReader({
+      exporter: new OTLPMetricExporter(),
+      exportIntervalMillis: intervaloExportacaoMetricas(process.env),
+    }),
     instrumentations: [getNodeAutoInstrumentations()],
   });
 
