@@ -1,7 +1,12 @@
 import { DeleteMessageCommand, ReceiveMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import { Logger } from '@nestjs/common';
+import { context, propagation, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import { W3CTraceContextPropagator } from '@opentelemetry/core';
+import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
 import { mockClient } from 'aws-sdk-client-mock';
 
+import { MetricasMensageria } from '../telemetry/metricas-mensageria';
 import { MessageHandlerRegistry } from './message-handler.registry';
 import { lerMessagingConfig } from './messaging.config';
 import { SqsInboxConsumer } from './sqs-inbox.consumer';
@@ -14,9 +19,13 @@ describe('SqsInboxConsumer', () => {
   let registry: MessageHandlerRegistry;
   let handler: jest.Mock;
   let consumer: SqsInboxConsumer;
+  let metricas: MetricasMensageria;
+  let contar: jest.SpyInstance;
 
   beforeEach(() => {
     sqs.reset();
+    metricas = new MetricasMensageria();
+    contar = jest.spyOn(metricas, 'mensagemProcessada');
     registry = new MessageHandlerRegistry();
     handler = jest.fn().mockResolvedValue(undefined);
     registry.registrar('x.v1', handler);
@@ -24,16 +33,22 @@ describe('SqsInboxConsumer', () => {
       new SQSClient({}),
       lerMessagingConfig({ INBOX_QUEUE_URL: 'url-fila' }),
       registry,
+      metricas,
     );
   });
 
-  const receber = (...mensagens: { id: string; corpo: string; grupo: string }[]) =>
+  const receber = (
+    ...mensagens: { id: string; corpo: string; grupo: string; traceparent?: string }[]
+  ) =>
     sqs.on(ReceiveMessageCommand).resolves({
       Messages: mensagens.map((m) => ({
         MessageId: m.id,
         ReceiptHandle: `rh-${m.id}`,
         Body: m.corpo,
         Attributes: { MessageGroupId: m.grupo },
+        MessageAttributes: m.traceparent
+          ? { traceparent: { DataType: 'String', StringValue: m.traceparent } }
+          : undefined,
       })),
     });
 
@@ -75,6 +90,68 @@ describe('SqsInboxConsumer', () => {
     ]);
   });
 
+  it('conta mensagens processadas por tipo e resultado', async () => {
+    handler.mockRejectedValueOnce(new Error('boom'));
+    receber(
+      { id: '1', corpo: corpo('m1', 'os-1'), grupo: 'os-1' },
+      { id: '2', corpo: corpo('m2', 'os-2'), grupo: 'os-2' },
+      { id: '3', corpo: '{lixo', grupo: 'os-3' },
+    );
+    await consumer.consumirLote();
+    expect(contar.mock.calls).toEqual([
+      ['x.v1', 'erro'],
+      ['x.v1', 'ok'],
+      ['desconhecido', 'erro'],
+    ]);
+  });
+
+  it('loga o sucesso com type, messageId, osId e duração', async () => {
+    const logInfo = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    try {
+      receber({ id: '1', corpo: corpo('m1', 'os-1'), grupo: 'os-1' });
+      await consumer.consumirLote();
+      expect(logInfo).toHaveBeenCalledWith({
+        msg: 'Mensagem processada',
+        type: 'x.v1',
+        messageId: 'm1',
+        osId: 'os-1',
+        duracaoMs: expect.any(Number),
+      });
+    } finally {
+      logInfo.mockRestore();
+    }
+  });
+
+  describe('trace', () => {
+    const TRACE_ID = '0af7651916cd43dd8448eb211c80319c';
+
+    beforeAll(() => {
+      context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+      propagation.setGlobalPropagator(new W3CTraceContextPropagator());
+      trace.setGlobalTracerProvider(new BasicTracerProvider());
+    });
+    afterAll(() => {
+      trace.disable();
+      propagation.disable();
+      context.disable();
+    });
+
+    it('o handler roda com span ativo no trace do traceparent recebido', async () => {
+      let traceIdNoHandler: string | undefined;
+      handler.mockImplementationOnce(async () => {
+        traceIdNoHandler = trace.getActiveSpan()?.spanContext().traceId;
+      });
+      receber({
+        id: '1',
+        corpo: corpo('m1', 'os-1'),
+        grupo: 'os-1',
+        traceparent: `00-${TRACE_ID}-b7ad6b7169203331-01`,
+      });
+      await consumer.consumirLote();
+      expect(traceIdNoHandler).toBe(TRACE_ID);
+    });
+  });
+
   it('lote vazio não faz nada', async () => {
     sqs.on(ReceiveMessageCommand).resolves({});
     await consumer.consumirLote();
@@ -86,6 +163,7 @@ describe('SqsInboxConsumer', () => {
       new SQSClient({}),
       lerMessagingConfig({ MESSAGING_ENABLED: 'false' }),
       registry,
+      metricas,
     );
     desligado.onApplicationBootstrap();
     expect(sqs.commandCalls(ReceiveMessageCommand)).toHaveLength(0);
@@ -146,6 +224,7 @@ describe('SqsInboxConsumer', () => {
       new SQSClient({}),
       lerMessagingConfig({ MESSAGING_ENABLED: 'false' }),
       registry,
+      metricas,
     );
     desligado.onApplicationBootstrap();
     await expect(desligado.beforeApplicationShutdown()).resolves.toBeUndefined();
@@ -175,6 +254,7 @@ describe('SqsInboxConsumer', () => {
         { send } as unknown as SQSClient,
         lerMessagingConfig({ INBOX_QUEUE_URL: 'url-fila' }),
         registry,
+        metricas,
       );
     });
     afterEach(() => {

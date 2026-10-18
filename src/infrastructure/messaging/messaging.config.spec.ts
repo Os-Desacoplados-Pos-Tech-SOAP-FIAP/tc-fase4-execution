@@ -9,6 +9,7 @@ describe('lerMessagingConfig', () => {
         AWS_ENDPOINT_URL: 'http://localhost:4566',
         INBOX_QUEUE_URL: 'url-fila',
         EVENTS_TOPIC_ARN: 'arn-topico',
+        DLQ_QUEUE_URL: 'url-dlq',
       }),
     ).toEqual({
       enabled: true,
@@ -16,6 +17,7 @@ describe('lerMessagingConfig', () => {
       endpoint: 'http://localhost:4566',
       inboxQueueUrl: 'url-fila',
       eventsTopicArn: 'arn-topico',
+      dlqQueueUrl: 'url-dlq',
     });
   });
 
