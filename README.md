@@ -66,6 +66,63 @@ Corpo padronizado com `statusCode`, `error`, `message` (e `code` nos erros de ne
 
 ## Arquitetura
 
+O Execution recebe comandos do OS pela fila FIFO, aplica as regras no domínio e grava tudo (ordem, capacidade, idempotência e outbox) num único commit na tabela DynamoDB; um publicador com lease envia os eventos ao tópico FIFO. As rotas do mecânico usam os mesmos casos de uso e a mesma tabela.
+
+```mermaid
+flowchart LR
+    MEC([Mecânico / atendente / admin])
+    OSOUT[OS Service]
+    OSIN[[inbox do OS]]
+
+    subgraph EXE["Execution Service"]
+        API["API REST /api/execution<br/>fila, diagnóstico, reparo, apontamento, métricas"]
+        CONS[Consumidor SQS FIFO<br/>long-poll + idempotência]
+        subgraph UC["Casos de uso"]
+            ED[enfileirar-diagnostico]
+            PIVO["enfileirar-execucao (pivô)<br/>reserva vaga: ativos menor que máximo"]
+            OUTROS[reabrir-diagnostico e ações do mecânico]
+        end
+        DB[("DynamoDB oficina-execution<br/>OS# · CAPACIDADE · MSG# · OUTBOX · LOCK<br/>GSI1 FILA#status")]
+        PUB[Publicador da outbox<br/>lease em LOCK/OUTBOX_PUBLISHER]
+    end
+
+    INBOX[[oficina-execution-inbox.fifo]]
+    DLQ[[DLQ da inbox<br/>após 3 recebimentos]]
+    TOPIC{{oficina-execution-events.fifo}}
+
+    MEC --> API
+    API --> OUTROS
+    OSOUT --> INBOX
+    INBOX --> CONS
+    INBOX -. falhas .-> DLQ
+    CONS --> ED
+    CONS --> PIVO
+    CONS --> OUTROS
+    ED --> DB
+    PIVO --> DB
+    OUTROS --> DB
+    DB --> PUB
+    PUB --> TOPIC
+    TOPIC --> OSIN
+```
+
+Status da ordem no Execution (`StatusExecucao`, transições em `OrdemExecucao`):
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> AGUARDANDO_DIAGNOSTICO: enfileirar-diagnostico
+    AGUARDANDO_DIAGNOSTICO --> EM_DIAGNOSTICO: mecânico inicia
+    EM_DIAGNOSTICO --> DIAGNOSTICO_CONCLUIDO: mecânico conclui
+    DIAGNOSTICO_CONCLUIDO --> EM_DIAGNOSTICO: reabrir-diagnostico
+    DIAGNOSTICO_CONCLUIDO --> AGUARDANDO_REPARO: pivô aceita (vaga reservada)
+    DIAGNOSTICO_CONCLUIDO --> EXECUCAO_RECUSADA: pivô recusa
+    AGUARDANDO_REPARO --> EM_REPARO: mecânico inicia reparo
+    EM_REPARO --> CONCLUIDA: concluir reparo (libera vaga)
+    EXECUCAO_RECUSADA --> [*]
+    CONCLUIDA --> [*]
+```
+
 - Camadas DDD: `domain` (OrdemExecucao) → `application` (casos de uso e portas) →
   `infrastructure` (DynamoDB, SNS/SQS, JWT) e `modules` (HTTP e handlers de mensagem).
 - **Banco próprio:** DynamoDB, **tabela única** (`oficina-execution`) com um GSI e TTL em `expiraEm`.
