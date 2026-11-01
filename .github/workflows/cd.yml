@@ -133,6 +133,7 @@ jobs:
             --from-literal=AWS_REGION="$AWS_REGION"
             --from-literal=MESSAGING_ENABLED=true
             --from-literal=OTEL_SERVICE_NAME="tc-fase4-$APP"
+            --from-literal=OTEL_METRIC_EXPORT_INTERVAL=15000
             --from-literal=DYNAMO_TABLE="$DYNAMO_TABLE"
             --from-literal=EXECUTION_MAX_CONCURRENT=3
             --from-literal=INBOX_QUEUE_URL="$INBOX_QUEUE_URL"
